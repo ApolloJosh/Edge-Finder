@@ -100,8 +100,8 @@ jobs:
         if: steps.ge.outputs.ge_due == 'true'
         continue-on-error: true
         run: |
-          pip install --quiet playwright
-          python -m playwright install --with-deps chromium > /dev/null
+          pip install --quiet playwright || { echo "::error title=Gridiron Edge export::pip install playwright failed"; exit 1; }
+          python -m playwright install --with-deps chromium > pw-install.log 2>&1 || { echo "::error title=Gridiron Edge export::browser install failed: $(tail -c 600 pw-install.log | tr '\n' ' ')"; exit 1; }
           python tools/ge_export.py gridiron-edge/index.html inputs/
           python edgefinder.py ge-import
 
