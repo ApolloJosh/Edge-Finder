@@ -31,7 +31,11 @@ def main(index_html, out_dir, timeout_s=300):
     url = "file://" + os.path.abspath(index_html)
     errors, console, failed = [], [], []
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        # Opened from a file, the page has origin "null", and ESPN's API refuses
+        # cross-site reads from that origin. This private headless run reads the
+        # same public data Gridiron Edge reads in your browser, so the browser's
+        # cross-site check is switched off for it.
+        browser = p.chromium.launch(args=["--disable-web-security"])
         page = browser.new_page(accept_downloads=True, viewport={"width": 1400, "height": 900})
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.on("console", lambda m: console.append("%s: %s" % (m.type, m.text)) if m.type in ("error", "warning") else None)
