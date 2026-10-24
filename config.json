@@ -1,0 +1,148 @@
+{
+  "_readme": "Edge Finder settings. Payout tables change - check each app before trusting a breakeven, and edit the numbers here.",
+
+  "odds_api": {
+    "base": "https://api.the-odds-api.com/v4",
+    "hours_ahead": 30,
+    "budget_per_pull": 150
+  },
+
+  "books": {
+    "pickem": ["prizepicks", "underdog"],
+    "sportsbook": ["fliff"],
+    "sharp": {
+      "pinnacle": 1.5,
+      "fanduel": 1.0,
+      "draftkings": 1.0,
+      "betonlineag": 0.5,
+      "betmgm": 0.5,
+      "espnbet": 0.5
+    }
+  },
+
+  "leagues": {
+    "nba": {
+      "sport_key": "basketball_nba",
+      "markets": [
+        "player_points",
+        "player_rebounds",
+        "player_assists",
+        "player_threes",
+        "player_points_rebounds_assists"
+      ],
+      "kalshi_series": {
+        "KXNBAPTS": "player_points",
+        "KXNBAREB": "player_rebounds",
+        "KXNBAAST": "player_assists",
+        "KXNBA3PT": "player_threes",
+        "KXNBAPRA": "player_points_rebounds_assists"
+      }
+    },
+    "nfl": {
+      "sport_key": "americanfootball_nfl",
+      "markets": [
+        "player_pass_yds",
+        "player_pass_attempts",
+        "player_rush_yds",
+        "player_rush_attempts",
+        "player_rush_reception_yds",
+        "player_reception_yds",
+        "player_receptions"
+      ],
+      "kalshi_series": {
+        "KXNFLPASSYDS": "player_pass_yds",
+        "KXNFLRSHYDS": "player_rush_yds",
+        "KXNFLRECYDS": "player_reception_yds",
+        "KXNFLREC": "player_receptions",
+        "KXNFLRRYDS": "player_rush_reception_yds"
+      }
+    }
+  },
+
+  "max_line_gap": {
+    "_note": "Furthest a book's line may sit from a sharp line before the sharp price is ignored instead of stretched.",
+    "player_points": 2.0,
+    "player_rebounds": 1.0,
+    "player_assists": 1.0,
+    "player_threes": 0.0,
+    "player_points_rebounds_assists": 2.0,
+    "player_pass_yds": 15,
+    "player_pass_attempts": 2,
+    "player_rush_yds": 10,
+    "player_rush_attempts": 2,
+    "player_rush_reception_yds": 10,
+    "player_reception_yds": 10,
+    "player_receptions": 1.0,
+    "default": 1.0
+  },
+
+  "entries": {
+    "_note": "pays: hits -> multiplier. PrizePicks from its help center (Payouts Explained, Oct 2026). Underdog is a placeholder - check the app and fix.",
+    "prizepicks": {
+      "pp2":  {"label": "PP Power 2",  "picks": 2, "pays": {"2": 3}},
+      "pp3":  {"label": "PP Power 3",  "picks": 3, "pays": {"3": 5}},
+      "pp4":  {"label": "PP Power 4",  "picks": 4, "pays": {"4": 10}},
+      "pp5":  {"label": "PP Power 5",  "picks": 5, "pays": {"5": 20}},
+      "pp6":  {"label": "PP Power 6",  "picks": 6, "pays": {"6": 37.5}},
+      "ppf3": {"label": "PP Flex 3",   "picks": 3, "pays": {"3": 2.25, "2": 1.25}},
+      "ppf4": {"label": "PP Flex 4",   "picks": 4, "pays": {"4": 5, "3": 1.5}},
+      "ppf5": {"label": "PP Flex 5",   "picks": 5, "pays": {"5": 10, "4": 2, "3": 0.4}},
+      "ppf6": {"label": "PP Flex 6",   "picks": 6, "pays": {"6": 25, "5": 2, "4": 0.4}}
+    },
+    "underdog": {
+      "ud2": {"label": "UD Standard 2", "picks": 2, "pays": {"2": 3}, "verify": true},
+      "ud3": {"label": "UD Standard 3", "picks": 3, "pays": {"3": 6}, "verify": true},
+      "ud4": {"label": "UD Standard 4", "picks": 4, "pays": {"4": 10}, "verify": true},
+      "ud5": {"label": "UD Standard 5", "picks": 5, "pays": {"5": 20}, "verify": true}
+    }
+  },
+
+  "thresholds": {
+    "pickem_cushion": 0.01,
+    "fliff_min_ev": 0.03,
+    "kalshi_min_ev": 0.03,
+    "min_sharp_books": 2,
+    "one_book_ok": false,
+    "entries_from_different_games": true
+  },
+
+  "auto": {
+    "_note": "GitHub Actions runs every 15 minutes. Each group of games is pulled at these minutes before tip. Cost per game = markets x number of offsets.",
+    "leagues": ["nba", "nfl"],
+    "board_offsets_min": [90, 30],
+    "min_lead_min": 5,
+    "close_window_min": 30,
+    "horizon_hours": 14,
+    "daily_credit_cap": 250,
+    "credit_floor": 40
+  },
+
+  "github": {
+    "repo": "ApolloJosh/Edge-Finder"
+  },
+
+  "kalshi": {
+    "base": "https://api.elections.kalshi.com/trade-api/v2",
+    "contracts": 10
+  },
+
+  "gridiron_edge": {
+    "_note": "Gridiron Edge market id -> Odds API market. 'biased' ones still price on a raw median that runs high (Gridiron Edge docs/medshrink.md).",
+    "map": {
+      "passYds": "player_pass_yds",
+      "passAtt": "player_pass_attempts",
+      "passCmp": "player_pass_completions",
+      "passRushYds": "player_pass_rush_yds",
+      "rushYds": "player_rush_yds",
+      "rushAtt": "player_rush_attempts",
+      "rushRecYds": "player_rush_reception_yds",
+      "rbRec": "player_receptions",
+      "recYds": "player_reception_yds",
+      "rec": "player_receptions"
+    },
+    "biased": ["passYds", "passRushYds", "rushRecYds", "rbRec", "recYds:TE"],
+    "agree_at": 0.55,
+    "conflict_at": 0.45,
+    "stale_days": 6
+  }
+}

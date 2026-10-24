@@ -1,0 +1,9 @@
+.env
+data/
+boards/
+inputs/
+__pycache__/
+*.pyc
+.DS_Store
+site/
+gridiron-edge/

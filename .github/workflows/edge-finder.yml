@@ -1,0 +1,156 @@
+# Edge Finder runs itself here.
+#
+#  * Every 15 minutes (about 10 AM - 1 AM Central): pull any games ~90 and
+#    ~30 min from tip, take closing snapshots for games you bet, run any
+#    command issues, and republish the board if anything changed.
+#  * When you open an issue (the board's Log button does this): the same
+#    pass runs right away, so the bet is logged within a couple of minutes.
+#  * Actions tab > Edge Finder > Run workflow: run a task by hand.
+#
+# The SQLite database lives on the `state` branch as a single commit that is
+# force-pushed each run, so the repo never grows. The board publishes to
+# GitHub Pages.
+
+name: Edge Finder
+
+on:
+  schedule:
+    - cron: "7,22,37,52 0-6,15-23 * * *"
+  workflow_dispatch:
+    inputs:
+      task:
+        description: What to run
+        type: choice
+        default: auto
+        options: [auto, refresh-nba, refresh-nfl, gridiron-edge, probe, site-only]
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+  pages: write
+  id-token: write
+
+# One run at a time: every run reads and rewrites the same database.
+concurrency:
+  group: edge-finder-state
+  cancel-in-progress: false
+
+jobs:
+  run:
+    # Issues from anyone but the repo owner never start a run.
+    if: github.event_name != 'issues' || github.event.issue.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      site: ${{ steps.site.outputs.built }}
+    env:
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      PYTHONDONTWRITEBYTECODE: "1"
+      TASK: ${{ inputs.task || 'auto' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore database from the state branch
+        run: |
+          mkdir -p data inputs
+          if git fetch --depth 1 origin state 2>/dev/null; then
+            git show origin/state:edgefinder.db > data/edgefinder.db
+            echo "Restored $(du -h data/edgefinder.db | cut -f1) database"
+          else
+            echo "No state branch yet - starting fresh"
+          fi
+
+      # ---------- Gridiron Edge (NFL game days only) ----------
+      - name: Is a Gridiron Edge export due?
+        id: ge
+        if: github.event_name != 'issues'
+        run: |
+          if [ "$TASK" = "gridiron-edge" ]; then echo "ge_due=true" >> "$GITHUB_OUTPUT"; else python edgefinder.py ge-due; fi
+
+      - name: Check out Gridiron Edge
+        if: steps.ge.outputs.ge_due == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ApolloJosh/Gridiron-Edge
+          path: gridiron-edge
+
+      - name: Run Gridiron Edge and export
+        id: geexport
+        if: steps.ge.outputs.ge_due == 'true'
+        continue-on-error: true
+        run: |
+          pip install --quiet playwright
+          python -m playwright install --with-deps chromium > /dev/null
+          python tools/ge_export.py gridiron-edge/index.html inputs/
+          python edgefinder.py ge-import
+
+      # ---------- the work ----------
+      - name: Commands from issues (bet / result / refresh)
+        id: issues
+        if: env.TASK == 'auto'
+        run: python edgefinder.py sweep-issues
+
+      - name: Scheduled pass
+        id: main
+        if: env.TASK == 'auto'
+        run: python edgefinder.py auto
+
+      - name: Manual task
+        id: manual
+        if: env.TASK != 'auto'
+        run: |
+          case "$TASK" in
+            refresh-nba) python edgefinder.py pull nba --yes --hours 14 ;;
+            refresh-nfl) python edgefinder.py pull nfl --yes --hours 30 ;;
+            probe)       python edgefinder.py probe ;;
+          esac
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      # ---------- save + publish ----------
+      - name: Save database to the state branch
+        if: always()
+        run: |
+          [ -f data/edgefinder.db ] || exit 0
+          tmp=$(mktemp -d)
+          cp data/edgefinder.db "$tmp/"
+          cd "$tmp"
+          git init -q -b state
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add edgefinder.db
+          git commit -q -m "state $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" state
+          echo "Saved $(du -h edgefinder.db | cut -f1) database"
+
+      - name: Build the site
+        id: site
+        if: >-
+          steps.issues.outputs.changed == 'true' || steps.main.outputs.changed == 'true' ||
+          steps.manual.outputs.changed == 'true' || steps.geexport.outcome == 'success'
+        run: |
+          python edgefinder.py site --out site --status "Last change: $(TZ=America/Chicago date '+%a %b %-d, %-I:%M %p') Central"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      - name: Package the site
+        if: steps.site.outputs.built == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: run
+    if: needs.run.outputs.site == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
