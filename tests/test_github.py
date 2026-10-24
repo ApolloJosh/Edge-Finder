@@ -192,10 +192,13 @@ class Site(unittest.TestCase):
         nfl = _read(os.path.join(out, "nfl.html"))
         self.assertIn("No NFL lines pulled yet", nfl)
         bets = _read(os.path.join(out, "bets.html"))
-        self.assertIn("issues/new?title=result%201%20win", bets)
+        self.assertIn('"et":"straight"', bets)
+        self.assertIn("window.EF_REPO", bets)
+        self.assertTrue(os.path.exists(os.path.join(out, "bets-data.json")))
         idx = _read(os.path.join(out, "index.html"))
         self.assertIn("1 open", idx)
-        self.assertIn("refresh%20nba", idx)
+        self.assertIn('data-cmd="refresh nba"', idx)
+        self.assertIn('id="save"', nba)
 
 
 if __name__ == "__main__":

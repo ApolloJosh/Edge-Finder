@@ -271,6 +271,14 @@ def suggest_entries(cfg, pickem, be):
     return out
 
 
+def row_value(x):
+    """The one number a row is judged by: pick'em edge over the bar, Fliff EV, Kalshi ROI."""
+    for k in ("edge", "roi", "ev"):
+        if x.get(k) is not None:
+            return x[k]
+    return None
+
+
 def save_codes(con, board):
     ts = board["built_at"]
     for section in ("pickem", "fliff", "kalshi"):
@@ -278,10 +286,10 @@ def save_codes(con, board):
             con.execute(
                 "INSERT INTO board_picks (board_ts, league, code, pull_id, event_id, commence_time, book,"
                 " market, player, player_key, side, point, price, multiplier, ask, ref, fair_p, n_sharp,"
-                " ge_p, ge_score) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " ge_p, ge_score, flagged, edge) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ts, board["league"], x["code"], board["pull"]["id"], x["event_id"], x["commence"],
                  x["book"], x["market"], x["player"], x["player_key"], x["side"], x["point"],
                  x["price"], x["multiplier"], x["ask"], x["ref"], x["p_raw"], x["n_sharp"],
-                 x.get("ge_p"), x.get("ge_score")),
+                 x.get("ge_p"), x.get("ge_score"), 1 if x["flagged"] else 0, row_value(x)),
             )
     con.commit()

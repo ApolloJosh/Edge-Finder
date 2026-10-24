@@ -7,6 +7,8 @@ import os
 
 from .board import BOOK_LABELS, market_label
 from .util import fmt_american, local, parse_iso, pct
+from .webjs import SHEET_CSS
+from .webjs import script as ef_script
 
 E = html.escape
 
@@ -131,12 +133,12 @@ ICONS = """<meta name="theme-color" content="#f4f3ef" media="(prefers-color-sche
 def head(title, web=True):
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
-            '<title>%s</title>%s<style>%s</style></head>' % (E(title), ICONS if web else "", CSS))
+            '<title>%s</title>%s<style>%s%s</style></head>' % (E(title), ICONS if web else "", CSS, SHEET_CSS if web else ""))
 
 
 def nav_html(active, web):
-    links = [("index", "Home"), ("nba", "NBA"), ("nfl", "NFL"), ("bets", "Bets & CLV")]
-    return '<nav class="top">%s</nav>' % "".join(
+    links = [("index", "Home"), ("nba", "NBA"), ("nfl", "NFL"), ("bets", "Results")]
+    return '<nav class="top">%s<a href="#settings" id="navset" class="gear" aria-label="Settings">Settings</a></nav>' % "".join(
         '<a href="%s.html"%s>%s</a>' % (k, ' class="on"' if k == active else "", E(t)) for k, t in links)
 
 
@@ -273,9 +275,9 @@ BODY = """<body>
 <div class="stepper"><button id="minus" aria-label="Less">−</button><span>$<b id="stake">1</b></span><button id="plus" aria-label="More">+</button></div></div>
 <div class="d3" id="dexp"></div>
 <div class="d4">%(primary)s<button class="ghost" id="copy">Copy</button></div>
-<div class="cmd" id="cmd"></div>
+<div class="cmd" id="cmd"></div>%(fallback)s
 </div></div>
-<script>const D = %(data)s;</script>
+%(efjs)s<script>const D = %(data)s;</script>
 <script>%(js)s</script>
 </body></html>"""
 
@@ -466,13 +468,25 @@ function dock(preferEntry) {
          ` --stake ${stake} --board ${D.built}`;
   $('#cmd').textContent = D.repo ? args : `cd "${D.root}" && python3 edgefinder.py ${args}`;
   const log = $('#log');
-  if (log) {
-    const body = '```\n' + args + '\n```\nSubmit this issue to log the bet. Edge Finder replies here in a minute or two.';
-    log.href = `https://github.com/${D.repo}/issues/new?title=${encodeURIComponent(args)}&body=${encodeURIComponent(body)}`;
-    log.classList.toggle('off', !!msg);
-  }
+  if (log) log.href = `https://github.com/${D.repo}/issues/new?title=${encodeURIComponent(args)}&body=${encodeURIComponent('```\n' + args + '\n```')}`;
+  const save = $('#save');
+  if (save) { save.disabled = !!msg; save.textContent = window.EF && EF.token() ? 'Save bet' : 'Save bet (set up once)'; }
+  summary = (types && sel.value ? types[sel.value].label : legs.map(r => r.bl).filter((x, i, a) => a.indexOf(x) === i).join(' + ')) +
+            ' · $' + stake + ' · ' + legs.map(r => `${r.pl} ${r.pk} ${r.m}`).join(', ');
 }
+let summary = '';
+if ($('#save')) $('#save').onclick = async () => {
+  const btn = $('#save');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const n = await EF.send(args, 'bet', {summary, league: D.league});
+  if (n) {
+    EF.toast('Saved. It shows on Results in a couple of minutes.');
+    picked.clear(); draw();
+  }
+  dock();
+};
 $('#entry').onchange = () => dock();
+window.addEventListener('ef-auth', () => dock());
 const setStake = v => { stake = Math.max(1, Math.min(100, v)); try { localStorage.setItem('ef-stake', stake); } catch (e) {} dock(); };
 $('#minus').onclick = () => setStake(stake - 1);
 $('#plus').onclick = () => setStake(stake + 1);
@@ -489,11 +503,13 @@ draw(); dock();
 def render(board, cfg, root, web=None):
     """web: {'repo': 'owner/name'} for the GitHub Pages version (Log button opens an issue)."""
     data = payload(board, cfg, root, web)
-    primary = ('<a id="log" class="btn" target="_blank" rel="noopener">Log bet on GitHub</a>' if web
-               else "")
+    primary = '<button id="save">Save bet</button>' if web else ""
+    fallback = ('<div class="cmd"><a id="log" target="_blank" rel="noopener">or log it on GitHub instead</a></div>'
+                if web else "")
     body = BODY % {
         "nav": nav_html(board["league"], web) if web else "",
-        "primary": primary,
+        "primary": primary, "fallback": fallback,
+        "efjs": ef_script(web["repo"]) if web else "",
         "data": json.dumps(data, separators=(",", ":")).replace("</", "<\\/"),
         "js": JS,
     }

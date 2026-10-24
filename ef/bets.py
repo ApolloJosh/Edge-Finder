@@ -96,9 +96,9 @@ def log_bet(con, cfg, league, codes, entry=None, stake=1.0, price=None, contract
 def _insert_leg(con, bet_id, leg, p, price, fair, be):
     con.execute(
         "INSERT INTO bet_legs (bet_id, leg, event_id, commence_time, market, player, player_key, side, point,"
-        " price, fair_p, breakeven, ge_p, ge_score) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " price, fair_p, breakeven, ge_p, ge_score, flagged, edge) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (bet_id, leg, p["event_id"], p["commence_time"], p["market"], p["player"], p["player_key"],
-         p["side"], p["point"], price, fair, be, p["ge_p"], p["ge_score"]))
+         p["side"], p["point"], price, fair, be, p["ge_p"], p["ge_score"], p["flagged"], p["edge"]))
 
 
 # ------------------------------------------------------------------ closing lines

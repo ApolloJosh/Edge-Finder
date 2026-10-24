@@ -37,13 +37,24 @@ pruned after 3 days.
 
 ## Using it
 
-1. Open the board on your phone. Flagged picks beat the sharp market.
-2. Tick the picks you actually play, pick the entry type and stake, tap **Log bet on GitHub**,
-   then **Submit** on the issue it opens. A run starts right away; Edge Finder replies on the
-   issue with the logged bet within a couple of minutes and closes it.
-3. When a bet settles, open **Bets & CLV** and tap Win / Loss / Push. For a flex entry that
-   partly hit, open an issue titled like `result 12 partial --hits 4`.
-4. Lineup news? The home page has **Refresh NBA now** / **Refresh NFL now** (costs credits).
+1. **Once per phone:** open the site, tap **Settings**, then **Create the key on GitHub**. GitHub opens with
+   the key filled in; under *Repository access* pick **Only select repositories → Edge-Finder**, tap
+   **Generate token**, copy it, paste it back in Settings and tap **Connect**. The key can only open issues
+   on this repo, lasts a year, and stays on that device.
+2. Open a board. Flagged picks beat the sharp market. Tick the picks you actually play, set the entry and
+   stake, and tap **Save bet**. It shows on **Results** as "recording" and is recorded within a couple of
+   minutes. (Behind the scenes the app files an issue that the next run reads, records and closes; you never
+   need to look at it.)
+3. Closing lines are captured before each game, and **results are graded automatically** from ESPN box
+   scores once the game is final. A pick'em entry with a voided or pushed leg, or a player the box score
+   doesn't list, is left for you: tap Win / Loss / Push on Results.
+4. Lineup news? Home has **Refresh NBA now** / **Refresh NFL now** (costs credits).
+
+**Results** shows your record, profit, closing line value and leg hit rate; a profit-over-time chart and a
+CLV trend; and what's working by app, entry type, stat, flagged-vs-your-own picks, and (NFL) whether
+Gridiron Edge agreed. Filter by 7 days / 30 days / all and by league.
+
+No key on a device? Save still works through GitHub: the bottom sheet has "or log it on GitHub instead".
 
 Only issues opened by the repo owner run anything, and only these commands:
 `bet`, `result`, `refresh`, `ge-import`. Other issues are left alone.
@@ -71,7 +82,7 @@ Breakevens today: PrizePicks Flex 6 54.2%, Power 5 54.9%, Power 2 57.7%; Underdo
 
 ## Judging it: closing line value first
 
-The Bets & CLV page shows average CLV overall, by app, by week, and for NFL by whether
+The Results page shows average CLV overall and over time, and for NFL by whether
 Gridiron Edge agreed. Consistently positive CLV is the earliest real sign of an edge; win-loss
 takes ~1,500 bets to mean much. **Keep stakes at $1–5 until CLV stays positive over a few
 hundred bets.**
@@ -117,7 +128,6 @@ Local runs use their own database (`data/edgefinder.db`), separate from the one 
 ## What's not covered yet
 
 - **Sleeper** isn't in any reachable feed. Its lines usually track Underdog's.
-- Results aren't graded automatically yet; tap them on the Bets page.
 - Demons/goblins and Underdog boosted picks are left out (they live in separate markets).
 - Scheduled GitHub runs can start a few minutes late at busy times, so "30 minutes before tip"
   is approximate. Use Refresh when news breaks.

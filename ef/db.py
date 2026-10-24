@@ -76,7 +76,8 @@ CREATE TABLE IF NOT EXISTS board_picks (
   event_id TEXT, commence_time TEXT,
   book TEXT, market TEXT, player TEXT, player_key TEXT, side TEXT, point REAL,
   price REAL, multiplier REAL, ask REAL, ref TEXT,
-  fair_p REAL, n_sharp INTEGER, ge_p REAL, ge_score REAL
+  fair_p REAL, n_sharp INTEGER, ge_p REAL, ge_score REAL,
+  flagged INTEGER, edge REAL
 );
 CREATE INDEX IF NOT EXISTS board_picks_code ON board_picks (league, board_ts, code);
 
@@ -90,7 +91,8 @@ CREATE TABLE IF NOT EXISTS bets (
   contracts REAL,
   result TEXT,                     -- NULL | win | loss | push | partial
   payout REAL,
-  notes TEXT
+  notes TEXT,
+  graded_by TEXT                   -- 'auto' (ESPN) | NULL (by hand)
 );
 
 CREATE TABLE IF NOT EXISTS bet_legs (
@@ -103,14 +105,34 @@ CREATE TABLE IF NOT EXISTS bet_legs (
   breakeven REAL,                  -- pick'em per-pick breakeven of the entry
   ge_p REAL, ge_score REAL,
   close_fair_p REAL, close_ts TEXT, close_n INTEGER,
+  flagged INTEGER, edge REAL,      -- was it flagged on the board, and by how much
+  actual REAL, leg_result TEXT,    -- from the box score: hit | miss | push | void | review
   PRIMARY KEY (bet_id, leg)
 );
 """
+
+
+# Columns added after the first release, so older databases pick them up.
+ADDED = [
+    ("board_picks", "flagged", "INTEGER"), ("board_picks", "edge", "REAL"),
+    ("bets", "graded_by", "TEXT"),
+    ("bet_legs", "flagged", "INTEGER"), ("bet_legs", "edge", "REAL"),
+    ("bet_legs", "actual", "REAL"), ("bet_legs", "leg_result", "TEXT"),
+]
+
+
+def migrate(con):
+    for table, col, typ in ADDED:
+        have = {r[1] for r in con.execute("PRAGMA table_info(%s)" % table)}
+        if have and col not in have:
+            con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, col, typ))
+    con.commit()
 
 
 def connect(path=None):
     ensure_dirs()
     con = sqlite3.connect(path or os.environ.get("EDGEFINDER_DB") or DB_PATH)
     con.row_factory = sqlite3.Row
-    con.executescript(SCHEMA)
+    con.executescript(SCHEMA)     # creates anything missing; never alters existing tables
+    migrate(con)                  # adds columns introduced after a database was created
     return con

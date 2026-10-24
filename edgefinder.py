@@ -29,6 +29,7 @@ from ef import bets as betlog
 from ef import board as boardmod
 from ef import gridiron, render
 from ef import auto as automod
+from ef import grade as grademod
 from ef import web
 from ef.config import BOARDS_DIR, ROOT, load_aliases, load_config, load_env, odds_api_key
 from ef.db import connect
@@ -124,6 +125,11 @@ def cmd_auto(cfg, con, args):
             notice("%s: %d games ahead, board pull %s, %d closing snapshot(s), %d credits%s" % (
                 lg.upper(), r.get("games_ahead", 0), "yes" if r["board_pull"] else "no", r["close_pulls"],
                 r["credits"], (" (" + r["skipped"] + ")") if r["skipped"] else ""))
+    try:
+        n = grademod.grade_open_bets(con, cfg, aliases=load_aliases(), log=notice)
+        changed = changed or n > 0
+    except Exception as e:  # grading must never stop the scheduled pass
+        notice("Grading skipped: %s" % e)
     automod.prune(con)
     gh_output(changed="true" if changed else "false")
 
@@ -133,9 +139,11 @@ def _gh(*args, stdin=None):
     return subprocess.run(["gh"] + list(args), input=stdin, capture_output=True, text=True)
 
 
-def handle_command(cmd):
+def handle_command(cmd, number=None):
     """Run one issue command. (ok, text)."""
     argv = list(cmd)
+    if argv[0] == "bet" and number is not None and "--note" not in argv:
+        argv += ["--note", "issue #%d" % number]   # lets the app see the bet has been recorded
     if argv[0] == "refresh":
         lg = argv[1] if len(argv) > 1 else "nba"
         argv = ["pull", lg, "--yes", "--hours", "14"]
@@ -168,7 +176,7 @@ def cmd_sweep_issues(cfg, con, args):
             ok, text, cmd = False, ("No command found. Use the Log button on the board, or write one line like:\n"
                                     "result 7 win\nrefresh nba"), ["?"]
         else:
-            ok, text = handle_command(cmd)
+            ok, text = handle_command(cmd, it["number"])
         _gh("issue", "comment", str(it["number"]), "--repo", repo, "--body-file", "-",
             stdin=web.comment_for(cmd, ok, text))
         _gh("issue", "close", str(it["number"]), "--repo", repo)
@@ -270,6 +278,7 @@ def main(argv=None):
     sp.add_argument("--out", default="site")
     sp.add_argument("--status", default="")
     sub.add_parser("ge-due")
+    sub.add_parser("grade")
     sub.add_parser("probe")
     sp = sub.add_parser("clv")
     sp.add_argument("league", nargs="?", choices=["nba", "nfl"])
@@ -328,6 +337,9 @@ def main(argv=None):
     elif args.cmd == "site":
         web.build_site(con, cfg, args.out, status=args.status)
         print("Site written to %s/" % args.out)
+    elif args.cmd == "grade":
+        n = grademod.grade_open_bets(con, cfg, aliases=load_aliases())
+        print("Settled %d bet(s)." % n)
     elif args.cmd == "ge-due":
         cmd_ge_due(cfg, con, args)
     elif args.cmd == "probe":
