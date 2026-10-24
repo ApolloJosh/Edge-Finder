@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 from urllib.parse import quote
 
 from . import bets as betlog
@@ -57,25 +58,60 @@ def issue_url(repo, title, body):
 
 # ------------------------------------------------------------------ site
 
-PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>%(title)s</title><style>%(css)s
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-top:14px}
-.card{display:block;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;color:var(--ink);text-decoration:none}
-.card b{font-size:16px}.card .sub{margin-top:4px}
-.stat{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
-.res a{margin-right:4px;font-size:12px;padding:3px 8px}
-ol.how{color:var(--dim);font-size:13.5px;line-height:1.7;padding-left:20px}
-</style></head><body><div class="wrap">%(nav)s%(content)s</div></body></html>"""
+STATIC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
+
+EXTRA_CSS = """
+.tiles{display:grid;grid-template-columns:1fr;gap:10px;margin-top:14px}
+@media (min-width:640px){.tiles{grid-template-columns:repeat(3,1fr)}}
+a.tile{display:block;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;color:var(--ink);text-decoration:none}
+a.tile .k{font-size:13px;font-weight:650;color:var(--dim)}
+a.tile .v{font-size:26px;font-weight:800;margin:2px 0;font-variant-numeric:tabular-nums}
+a.tile .s{font-size:13px;color:var(--dim)}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.actions .btn{width:100%}
+details.how{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 16px}
+details.how summary{font-weight:650;cursor:pointer}
+details.how ol{color:var(--dim);font-size:14px;line-height:1.65;padding-left:20px;margin:8px 0 2px}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+@media (min-width:640px){.kpis{grid-template-columns:repeat(4,1fr)}}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.kpi .k{font-size:12.5px;color:var(--dim);font-weight:600}
+.kpi .v{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}
+.kpi .s{font-size:12px;color:var(--faint)}
+ul.break{list-style:none;margin:0;padding:0;background:var(--panel);border:1px solid var(--line);border-radius:14px}
+ul.break li{display:flex;justify-content:space-between;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:14px}
+ul.break li:last-child{border-bottom:0}
+ul.break li span:last-child{color:var(--dim);font-variant-numeric:tabular-nums;text-align:right}
+.bet{padding:12px 14px}
+.bet ul{list-style:none;margin:8px 0 0;padding:0}
+.bet li{font-size:13.5px;padding:6px 0;border-top:1px solid var(--line)}
+.bet li:first-child{border-top:0}
+.res{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.res .btn{width:100%;min-height:46px}
+.res .btn.win{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.badge{font-size:12px;font-weight:700;border-radius:6px;padding:2px 8px;background:var(--chip);color:var(--dim)}
+.badge.win{background:var(--accent-bg);color:var(--accent)}.badge.loss{background:var(--bad-bg);color:var(--bad)}
+"""
+
+AGO_JS = """<script>document.querySelectorAll('[data-ago]').forEach(el=>{const m=Math.round((Date.now()-Date.parse(el.dataset.ago))/60000);
+el.textContent=m<1?'just now':m<60?m+' min ago':Math.floor(m/60)+'h '+(m%60)+'m ago';});</script>"""
 
 
 def _page(title, active, content, web):
-    return PAGE % {"title": E(title), "css": render.CSS, "nav": render.nav_html(active, web), "content": content}
+    return (render.head(title, web=True).replace("</style>", EXTRA_CSS + "</style>") +
+            '<body><header class="bar"><div class="wrap">%s</div></header><main class="wrap">%s</main>%s</body></html>' % (
+                render.nav_html(active, web), content, AGO_JS))
 
 
-def _placeholder(league, why):
-    return "<h1>Edge Finder · %s</h1><div class=\"tablewrap\"><div class=\"empty\">%s</div></div>" % (
-        league.upper(), E(why))
+def _when(iso):
+    return local(parse_iso(iso)).strftime("%a %b %d, %I:%M %p").replace(" 0", " ")
+
+
+def copy_static(out_dir):
+    if not os.path.isdir(STATIC):
+        return
+    for name in os.listdir(STATIC):
+        shutil.copyfile(os.path.join(STATIC, name), os.path.join(out_dir, name))
 
 
 def build_site(con, cfg, out_dir, now=None, status=None):
@@ -84,23 +120,24 @@ def build_site(con, cfg, out_dir, now=None, status=None):
     repo = cfg["github"]["repo"]
     web = {"repo": repo}
     os.makedirs(out_dir, exist_ok=True)
-    cards = []
+    copy_static(out_dir)
+    offsets = " and ".join(str(o) for o in cfg["auto"]["board_offsets_min"])
+    tiles = []
     for lg in ("nba", "nfl"):
         try:
             b = boardmod.build(con, cfg, lg, now=now)
         except SystemExit:
             b = None
         if b is None:
-            page = _page("Edge Finder " + lg.upper(), lg, _placeholder(
-                lg, "No %s lines pulled yet. Edge Finder pulls each game about %s minutes before tip." % (
-                    lg.upper(), " and ".join(str(o) for o in cfg["auto"]["board_offsets_min"]))), web)
-            cards.append((lg, "No board yet", ""))
+            page = _page("Edge Finder " + lg.upper(), lg,
+                         '<h1>Edge Finder · %s</h1><div class="empty">No %s lines pulled yet. Each game is pulled about '
+                         '%s minutes before tip.</div>' % (lg.upper(), lg.upper(), offsets), web)
+            tiles.append((lg, "—", "No board yet"))
         else:
             boardmod.save_codes(con, b)
             page = render.render(b, cfg, "", web=web)
             fl = sum(1 for s in ("pickem", "fliff", "kalshi") for x in b[s] if x["flagged"])
-            pulled = local(parse_iso(b["pull"]["ts"])).strftime("%a %I:%M %p").replace(" 0", " ")
-            cards.append((lg, "%d flagged" % fl, "%d games · last pull %s" % (b["games"], pulled)))
+            tiles.append((lg, "%d flagged" % fl, '%d games · pulled <span data-ago="%s"></span>' % (b["games"], E(b["pull"]["ts"]))))
         with open(os.path.join(out_dir, "%s.html" % lg), "w") as f:
             f.write(page)
 
@@ -109,32 +146,35 @@ def build_site(con, cfg, out_dir, now=None, status=None):
 
     s = betlog.clv_summary(con, cfg, now=now)
     open_n = con.execute("SELECT COUNT(*) AS n FROM bets WHERE result IS NULL").fetchone()["n"]
-    clv_txt = ("%+.1f pts avg CLV over %d legs" % (100 * s["all"]["avg"], s["all"]["n"])) if s["all"] else "no closed legs yet"
+    clv_txt = ("%+.1f pts avg CLV · %d legs" % (100 * s["all"]["avg"], s["all"]["n"])) if s["all"] else "No closed legs yet"
     last = con.execute("SELECT * FROM pulls ORDER BY id DESC LIMIT 1").fetchone()
     credits = last["credits_remaining"] if last and last["credits_remaining"] is not None else None
-    tiles = "".join(
-        '<a class="card" href="%s.html"><b>%s</b><div class="stat">%s</div><div class="sub">%s</div></a>' % (
-            lg, lg.upper(), E(a), E(b)) for lg, a, b in cards)
-    tiles += '<a class="card" href="bets.html"><b>Bets &amp; CLV</b><div class="stat">%d open</div><div class="sub">%s</div></a>' % (
-        open_n, E(clv_txt))
-    st = E(status or "")
+    tile_html = "".join('<a class="tile" href="%s.html"><div class="k">%s</div><div class="v">%s</div><div class="s">%s</div></a>' % (
+        lg, lg.upper(), E(v), sub) for lg, v, sub in tiles)
+    tile_html += ('<a class="tile" href="bets.html"><div class="k">Bets &amp; CLV</div><div class="v">%d open</div>'
+                  '<div class="s">%s</div></a>' % (open_n, E(clv_txt)))
     content = """<h1>Edge Finder</h1>
-<div class="sub">Updated %(upd)s%(cred)s. Runs itself on GitHub Actions every 15 minutes; it only reads prices.</div>
-<div class="cards">%(tiles)s</div>
-<h2>How to use it</h2>
-<ol class="how">
-<li>Open a board. Flagged picks beat the sharp market; tick the ones you actually play.</li>
-<li>Tap <b>Log bet on GitHub</b>, then <b>Submit</b> on the issue it opens. Edge Finder records it and replies in a minute or two.</li>
-<li>Closing lines are captured automatically before each game you bet. Check <a href="bets.html">Bets &amp; CLV</a>.</li>
-<li>Lineup news? <a href="%(refresh)s" target="_blank" rel="noopener">Refresh NBA now</a> · <a href="%(refnfl)s" target="_blank" rel="noopener">Refresh NFL now</a> (costs credits).</li>
-</ol>
+<div class="sub">Updated <span data-ago="%(upd)s"></span>%(cred)s</div>
+<div class="tiles">%(tiles)s</div>
+<div class="actions">
+<a class="btn ghost" href="%(rn)s" target="_blank" rel="noopener">Refresh NBA now</a>
+<a class="btn ghost" href="%(rf)s" target="_blank" rel="noopener">Refresh NFL now</a>
+</div>
+<div class="sub" style="margin-top:6px">Refresh when lineup news breaks. Each refresh costs credits; Submit the issue it opens.</div>
+<details class="how"><summary>How it works</summary><ol>
+<li>Every 15 minutes, GitHub pulls each game about %(off)s minutes before tip and prices every line against the sharp books.</li>
+<li>Open a board, tap the picks you actually play, then <b>Log bet on GitHub</b> and <b>Submit</b>. It's recorded within a couple of minutes.</li>
+<li>Closing lines are saved automatically before each game you bet. Tap Win / Loss / Push on <a href="bets.html">Bets</a> when it settles.</li>
+<li>On NFL game days it runs Gridiron Edge itself and shows its read on each pick.</li>
+<li>Add to your Home Screen: Share → <b>Add to Home Screen</b>. It opens full screen like an app.</li>
+</ol></details>
 <div class="foot">%(status)s</div>""" % {
-        "upd": local(now).strftime("%a %b %d, %I:%M %p").replace(" 0", " "),
+        "upd": E(iso_now(now)),
         "cred": (" · %s Odds API credits left" % credits) if credits is not None else "",
-        "tiles": tiles,
-        "refresh": E(issue_url(repo, "refresh nba", "```\nrefresh nba\n```")),
-        "refnfl": E(issue_url(repo, "refresh nfl", "```\nrefresh nfl\n```")),
-        "status": st,
+        "tiles": tile_html,
+        "rn": E(issue_url(repo, "refresh nba", "```\nrefresh nba\n```\nSubmit to re-pull tonight's NBA lines.")),
+        "rf": E(issue_url(repo, "refresh nfl", "```\nrefresh nfl\n```\nSubmit to re-pull NFL lines.")),
+        "off": offsets, "status": E(status or ""),
     }
     with open(os.path.join(out_dir, "index.html"), "w") as f:
         f.write(_page("Edge Finder", "index", content, web))
@@ -143,75 +183,76 @@ def build_site(con, cfg, out_dir, now=None, status=None):
     return out_dir
 
 
-def _stat_rows(rows):
-    out = []
-    for title, st in rows:
-        cls = "pos" if st["avg"] > 0 else "neg"
-        out.append("<tr><td>%s</td>%s%s%s%s</tr>" % (
-            E(title), render._td(str(st["n"]), st["n"], "num"),
-            render._td('<span class="%s">%+.1f</span>' % (cls, 100 * st["avg"]), st["avg"], "num"),
-            render._td("%.0f%%" % (100 * st["pos"]), st["pos"], "num"),
-            render._td("%+.1f" % (100 * st["beat"]) if st["beat"] is not None else "—", st["beat"] or 0, "num")))
-    return out
+def iso_now(now):
+    return now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _kpi(k, v, s="", cls=""):
+    return '<div class="kpi"><div class="k">%s</div><div class="v %s">%s</div><div class="s">%s</div></div>' % (k, cls, v, s)
+
+
+def _break(title, rows):
+    if not rows:
+        return ""
+    items = "".join("<li><span>%s</span><span>%d legs · <b class=\"%s\">%+.1f</b> · %.0f%% your way</span></li>" % (
+        E(name), st["n"], "pos" if st["avg"] > 0 else "neg", 100 * st["avg"], 100 * st["pos"]) for name, st in rows)
+    return "<h2>%s</h2><ul class=\"break\">%s</ul>" % (title, items)
 
 
 def bets_page(con, cfg, web, now):
     repo = web["repo"]
     s = betlog.clv_summary(con, cfg, now=now)
-    parts = ["<h1>Bets &amp; closing line value</h1>",
-             '<div class="sub">CLV = the sharp market\'s fair chance for your pick at close, minus when you placed it. '
-             "Consistently positive CLV is the earliest real sign of an edge. Keep stakes at $1&ndash;5 until it holds "
-             "over a few hundred bets.</div>"]
-    head = [("Group", 0), ("Legs", 1), ("Avg CLV (pts)", 1), ("Moved your way", 1), ("Close vs breakeven", 1)]
-    if s["all"]:
-        rows = _stat_rows([("All legs", s["all"])] + [("Book: " + k, v) for k, v in s["books"]]
-                          + [("Week " + k, v) for k, v in s["weeks"]])
-        parts.append("<h2>CLV</h2>" + render._table(head, rows, ""))
-        if s["ge"]:
-            parts.append("<h2>Gridiron Edge as a second opinion <small>NFL legs, by whether it agreed</small></h2>")
-            parts.append(render._table(head, _stat_rows([("GE " + k, v) for k, v in s["ge"]]), ""))
-    else:
-        parts.append('<h2>CLV</h2><div class="tablewrap"><div class="empty">No closed legs yet. CLV fills in once a game you bet has started.</div></div>')
     r = s["results"]
-    if r["n"]:
-        parts.append('<div class="chips"><span class="chip"><b>%d</b> settled</span><span class="chip">$<b>%.2f</b> staked</span>'
-                     '<span class="chip">$<b>%.2f</b> back</span><span class="chip"><b class="%s">%+.2f</b> (%+.1f%%)</span></div>' % (
-                         r["n"], r["staked"], r["paid"], "pos" if r["net"] >= 0 else "neg", r["net"], 100 * (r["roi"] or 0)))
+    a = s["all"]
+    parts = ["<h1>Bets &amp; CLV</h1>",
+             '<div class="sub">CLV = the sharp market\'s fair chance for your pick at close minus when you placed it. '
+             "Positive and steady is the earliest real sign of an edge. Keep stakes at $1&ndash;5 until it holds over a few "
+             "hundred bets.</div>"]
+    kp = [
+        _kpi("Avg CLV", "%+.1f" % (100 * a["avg"]) if a else "—", "pts per leg", ("pos" if a and a["avg"] > 0 else "neg") if a else ""),
+        _kpi("Moved your way", "%.0f%%" % (100 * a["pos"]) if a else "—", "of closed legs"),
+        _kpi("Closed legs", str(a["n"]) if a else "0", "aim for a few hundred"),
+        _kpi("Net", ("%+.2f" % r["net"]) if r["n"] else "—", ("%d settled · %+.1f%%" % (r["n"], 100 * (r["roi"] or 0))) if r["n"] else "nothing settled",
+             ("pos" if r["net"] >= 0 else "neg") if r["n"] else ""),
+    ]
+    parts.append('<div class="kpis">%s</div>' % "".join(kp))
+    if s["ge"]:
+        parts.append(_break("Gridiron Edge as a second opinion <small>NFL legs</small>", [("GE " + k, v) for k, v in s["ge"]]))
+    parts.append(_break("By app", s["books"]))
+    parts.append(_break("By week", s["weeks"][-8:]))
 
     bets = con.execute("SELECT * FROM bets ORDER BY id DESC LIMIT 200").fetchall()
-    open_rows, done_rows = [], []
+    open_cards, done_cards = [], []
     for b in bets:
         legs = con.execute("SELECT * FROM bet_legs WHERE bet_id=? ORDER BY leg", (b["id"],)).fetchall()
-        leg_html = "<br>".join(
-            "%s %s %g %s · %s%s" % (
+        li = []
+        for l in legs:
+            close = ""
+            if l["close_fair_p"] is not None:
+                d = l["close_fair_p"] - l["fair_p"]
+                close = ' → %s <b class="%s">%+.1f</b>' % (pct(l["close_fair_p"]), "pos" if d >= 0 else "neg", 100 * d)
+            li.append("<li><b>%s</b> %s %g %s<div class=\"meta\">fair %s%s</div></li>" % (
                 E(l["player"]), "Over" if l["side"] == "over" else "Under", l["point"], E(market_label(l["market"])),
-                pct(l["fair_p"]),
-                (' → %s <span class="%s">(%+.1f)</span>' % (pct(l["close_fair_p"]), "pos" if l["close_fair_p"] >= l["fair_p"] else "neg",
-                                                            100 * (l["close_fair_p"] - l["fair_p"])))
-                if l["close_fair_p"] is not None else "")
-            for l in legs)
+                pct(l["fair_p"]), close))
         start = min((l["commence_time"] for l in legs if l["commence_time"]), default=None)
-        cells = [render._td("#%d" % b["id"], b["id"], "code"),
-                 render._td(E(local(parse_iso(b["placed_at"])).strftime("%m/%d %I:%M %p").replace(" 0", " ")), b["placed_at"]),
-                 render._td(E(BOOK_LABELS.get(b["book"], b["book"])) + '<br><span class="sub">%s</span>' % E(b["entry_type"] or ""), b["book"]),
-                 render._td("$%.2f" % (b["stake"] or 0), b["stake"] or 0, "num"),
-                 render._td(leg_html, None, "sharp"),
-                 render._td(E(local_label(start)) if start else "", start or "")]
+        et = cfg.entries(b["book"]).get(b["entry_type"] or "", {}).get("label") if b["book"] in cfg.pickem_books else None
+        label = et or "%s · %s" % (BOOK_LABELS.get(b["book"], b["book"]),
+                                   {"kalshi": "%s contracts" % int(b["contracts"] or 0), "straight": "straight"}.get(b["entry_type"], b["entry_type"] or ""))
+        top = '<div class="row1"><b>#%d %s</b><span class="big">$%.2f</span></div>' % (b["id"], E(label), b["stake"] or 0)
+        meta = '<div class="meta">Placed %s%s</div>' % (E(_when(b["placed_at"])), (" · starts " + E(local_label(start))) if start else "")
         if b["result"]:
-            cells.insert(1, render._td("%s · $%.2f" % (E(b["result"]), b["payout"] or 0), b["payout"] or 0))
-            done_rows.append("<tr>%s</tr>" % "".join(cells))
+            badge = '<span class="badge %s">%s · $%.2f</span>' % (E(b["result"]), E(b["result"]).title(), b["payout"] or 0)
+            done_cards.append('<div class="card bet">%s%s<div class="meta">%s</div><ul>%s</ul></div>' % (top, meta, badge, "".join(li)))
         else:
-            links = "".join('<a class="btn ghost" target="_blank" rel="noopener" href="%s">%s</a>' % (
-                E(issue_url(repo, "result %d %s" % (b["id"], o), "```\nresult %d %s\n```" % (b["id"], o))), o.title())
-                for o in ("win", "loss", "push"))
-            cells.insert(1, '<td class="res">%s</td>' % links)
-            open_rows.append("<tr>%s</tr>" % "".join(cells))
-    bh = [("Placed", 0), ("App", 0), ("Stake", 1), ("Legs: fair at bet → at close (CLV)", 0), ("Game", 0)]
-    parts.append("<h2>Open bets <small>tap a result once it settles; for a flex entry that partly hit, open an issue "
-                 "like <code>result 12 partial --hits 4</code></small></h2>")
-    parts.append(render._table([("#", 0), ("Result", 0)] + bh, open_rows, "No open bets."))
+            btns = "".join('<a class="btn %s" target="_blank" rel="noopener" href="%s">%s</a>' % (
+                "win" if o == "win" else "ghost",
+                E(issue_url(repo, "result %d %s" % (b["id"], o), "```\nresult %d %s\n```\nSubmit to record it." % (b["id"], o))),
+                o.title()) for o in ("win", "loss", "push"))
+            open_cards.append('<div class="card bet">%s%s<ul>%s</ul><div class="res">%s</div></div>' % (top, meta, "".join(li), btns))
+    parts.append("<h2>Open <small>flex entry that partly hit? open an issue titled <code>result 12 partial --hits 4</code></small></h2>")
+    parts.append('<div class="grid">%s</div>' % "".join(open_cards) if open_cards else '<div class="empty">No open bets.</div>')
     parts.append("<h2>Settled</h2>")
-    parts.append(render._table([("#", 0), ("Result", 0)] + bh, done_rows, "Nothing settled yet."))
+    parts.append('<div class="grid">%s</div>' % "".join(done_cards[:60]) if done_cards else '<div class="empty">Nothing settled yet.</div>')
     return _page("Edge Finder bets", "bets", "\n".join(parts), web)
 
 

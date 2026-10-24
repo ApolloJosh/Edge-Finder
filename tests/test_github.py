@@ -181,11 +181,14 @@ class Site(unittest.TestCase):
         out = os.path.join(tempfile.mkdtemp(), "site")
         web.build_site(con, CFG, out, now=t0 - timedelta(minutes=50), status="test")
         names = sorted(os.listdir(out))
-        self.assertEqual(names, [".nojekyll", "bets.html", "index.html", "nba.html", "nfl.html"])
+        for n in (".nojekyll", "bets.html", "index.html", "nba.html", "nfl.html", "manifest.webmanifest",
+                  "apple-touch-icon.png", "icon-192.png", "icon-512.png"):
+            self.assertIn(n, names)
         nba = _read(os.path.join(out, "nba.html"))
         self.assertIn('id="log"', nba)
         self.assertIn('"ApolloJosh/Edge-Finder"', nba)
-        self.assertIn('data-start="', nba)
+        self.assertIn('"t":"', nba)
+        self.assertIn('rel="manifest"', nba)
         nfl = _read(os.path.join(out, "nfl.html"))
         self.assertIn("No NFL lines pulled yet", nfl)
         bets = _read(os.path.join(out, "bets.html"))

@@ -1,159 +1,146 @@
-"""The board as a self-contained HTML page (opens in your browser) plus a CSV."""
+"""The board as a self-contained page, built phone-first: cards, a sticky
+filter bar, and a bottom sheet for logging. Also writes a CSV of every row."""
 import csv
 import html
 import json
 import os
 
 from .board import BOOK_LABELS, market_label
-from .util import fmt_american, local, local_label, parse_iso, pct
+from .util import fmt_american, local, parse_iso, pct
 
 E = html.escape
 
 CSS = """
-:root{--bg:#f6f5f1;--panel:#fff;--ink:#1d1f23;--dim:#5d636e;--faint:#8a909a;--line:#e3e1da;
---accent:#0f7b5f;--accent-bg:#e3f3ec;--warn:#9a5b00;--warn-bg:#fdf1dc;--bad:#b3261e;--bad-bg:#fbe7e5;
---chip:#efeee9;--sel:#fff7d6}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#121417;--panel:#1a1d21;--ink:#e8e6e1;
---dim:#a6abb3;--faint:#7c828c;--line:#2b2f35;--accent:#47c79d;--accent-bg:#15342a;--warn:#e7a948;--warn-bg:#3a2c13;
---bad:#f08a80;--bad-bg:#3d1c19;--chip:#24282e;--sel:#3a3418}}
-*{box-sizing:border-box}
+:root{--bg:#f4f3ef;--panel:#fff;--ink:#17191d;--dim:#5b616c;--faint:#8b919b;--line:#e2e0d9;
+--accent:#0e7a5d;--accent-ink:#fff;--accent-bg:#e1f2ea;--warn:#8f5600;--warn-bg:#fcefd8;--bad:#b3261e;--bad-bg:#fae6e4;
+--chip:#ebe9e3;--sel:#fff5cc;--shadow:0 -8px 24px rgba(0,0,0,.10)}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0f1113;--panel:#181b1f;--ink:#ecebe7;
+--dim:#a7acb4;--faint:#7b818a;--line:#272b31;--accent:#3fc596;--accent-ink:#06261b;--accent-bg:#123428;--warn:#e8ab4c;
+--warn-bg:#352812;--bad:#f08a80;--bad-bg:#3a1b18;--chip:#23272d;--sel:#2e2a14;--shadow:0 -8px 24px rgba(0,0,0,.5)}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
+-webkit-font-smoothing:antialiased;padding-bottom:calc(24px + env(safe-area-inset-bottom))}
+body.docked{padding-bottom:calc(230px + env(safe-area-inset-bottom))}
 a{color:var(--accent)}
-body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
--webkit-font-smoothing:antialiased;padding-bottom:120px}
-.wrap{max-width:1280px;margin:0 auto;padding:20px 16px}
-h1{font-size:22px;margin:0 0 2px;letter-spacing:-.01em}
-h2{font-size:15px;margin:28px 0 8px;display:flex;align-items:baseline;gap:10px}
+.wrap{max-width:1100px;margin:0 auto;padding:0 16px}
+header.bar{position:sticky;top:0;z-index:20;background:var(--bg);padding:calc(8px + env(safe-area-inset-top)) 0 8px;
+border-bottom:1px solid var(--line)}
+nav.top{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;margin:0 -4px}
+nav.top::-webkit-scrollbar{display:none}
+nav.top a{flex:none;color:var(--dim);text-decoration:none;font-size:14px;font-weight:600;padding:8px 12px;border-radius:8px}
+nav.top a.on{background:var(--chip);color:var(--ink)}
+.controls{display:flex;gap:8px;align-items:center;margin-top:8px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+.controls::-webkit-scrollbar{display:none}
+.seg{display:flex;background:var(--chip);border-radius:9px;padding:2px;flex:none}
+.seg button{border:0;background:transparent;color:var(--dim);font:inherit;font-size:13px;font-weight:600;padding:6px 11px;border-radius:7px;min-height:34px}
+.seg button.on{background:var(--panel);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.chip{flex:none;border:1px solid var(--line);background:var(--panel);color:var(--dim);font:inherit;font-size:13px;font-weight:600;
+padding:6px 11px;border-radius:999px;min-height:34px;white-space:nowrap}
+.chip.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+select{font:inherit;font-size:14px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);min-height:36px}
+h1{font-size:22px;margin:16px 0 2px;letter-spacing:-.01em}
+@media (max-width:640px){h1{font-size:19px;margin-top:12px}.stats{margin-top:8px}h2{margin-top:20px}}
+h2{font-size:16px;margin:24px 0 10px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 h2 small{font-weight:400;color:var(--faint);font-size:12.5px}
 .sub{color:var(--dim);font-size:13px}
-.chips{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 4px}
-.chip{background:var(--chip);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--dim)}
-.chip b{color:var(--ink);font-weight:600}
-.notes{margin:12px 0 0;padding:0;list-style:none;display:grid;gap:6px}
-.notes li{background:var(--warn-bg);color:var(--warn);border-radius:6px;padding:7px 10px;font-size:12.5px}
-.tablewrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px}
-table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
-th{position:sticky;top:0;background:var(--panel);text-align:left;font-weight:600;color:var(--dim);font-size:11.5px;
-text-transform:uppercase;letter-spacing:.04em;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;white-space:nowrap}
-td{padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:top}
-tr:last-child td{border-bottom:none}
-td.num,th.num{text-align:right}
-td.code{color:var(--faint);font-size:12px}
-td.player{font-weight:600}
-td.sharp{color:var(--faint);font-size:11.5px;white-space:normal;min-width:180px}
-tr.dim{display:none}
-body.showall tr.dim{display:table-row;opacity:.62}
-tr.gone,body.showall tr.gone{display:none}
-nav.top{display:flex;gap:4px;flex-wrap:wrap;margin:0 0 14px}
-nav.top a{color:var(--dim);text-decoration:none;font-size:13px;font-weight:600;padding:5px 10px;border-radius:6px}
-nav.top a.on{background:var(--chip);color:var(--ink)}
-a.btn{display:inline-block;font-weight:600;padding:6px 12px;border-radius:6px;background:var(--accent);color:#fff;
-text-decoration:none;border:1px solid var(--accent)}
-a.btn.off{pointer-events:none;opacity:.4}
-a.btn.ghost{background:transparent;color:var(--dim);border-color:var(--line)}
-tr.sel{background:var(--sel)}
-.pos{color:var(--accent);font-weight:600}
-.neg{color:var(--bad)}
-.tag{display:inline-block;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:600}
+.dim{color:var(--faint)}
+.pos{color:var(--accent)}.neg{color:var(--bad)}
+.stats{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 0}
+.stat{background:var(--chip);border-radius:999px;padding:3px 10px;font-size:12.5px;color:var(--dim)}
+.stat b{color:var(--ink)}
+details.notes{margin-top:10px;background:var(--warn-bg);color:var(--warn);border-radius:10px;padding:8px 12px;font-size:13px}
+details.notes summary{cursor:pointer;font-weight:600}
+details.notes ul{margin:6px 0 2px;padding-left:18px}
+.grid{display:grid;grid-template-columns:1fr;gap:10px}
+@media (min-width:760px){.grid{grid-template-columns:1fr 1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.card.on{border-color:var(--accent);background:var(--sel)}
+.card.dimrow{opacity:.72}
+label.pick{display:flex;gap:12px;padding:12px 14px;cursor:pointer;min-height:64px}
+label.pick input{position:absolute;opacity:0;pointer-events:none}
+.box{flex:none;width:24px;height:24px;border-radius:7px;border:2px solid var(--faint);margin-top:2px;display:grid;place-items:center}
+.card.on .box{background:var(--accent);border-color:var(--accent)}
+.card.on .box:after{content:"";width:6px;height:11px;border:solid var(--accent-ink);border-width:0 2.5px 2.5px 0;transform:rotate(45deg) translate(-1px,-1px)}
+.main{flex:1;min-width:0}
+.row1{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.who{font-weight:700;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.big{font-weight:800;font-size:18px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.big small{font-size:11px;font-weight:600;color:var(--faint);margin-left:2px}
+.what{font-size:14.5px;margin-top:1px}
+.what b{font-weight:650}
+.meta{font-size:12.5px;color:var(--dim);margin-top:3px;font-variant-numeric:tabular-nums}
+.tag{display:inline-block;border-radius:5px;padding:0 6px;font-size:11.5px;font-weight:650;line-height:18px;vertical-align:1px}
 .tag.agree{background:var(--accent-bg);color:var(--accent)}
 .tag.conflict{background:var(--bad-bg);color:var(--bad)}
-.tag.neutral{background:var(--chip);color:var(--dim)}
-.tag.biased{background:var(--warn-bg);color:var(--warn)}
-.tag.adj{background:var(--chip);color:var(--dim);font-weight:500}
-.empty{padding:14px;color:var(--faint)}
-.entries{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:10px}
-.entry{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}
-.entry .hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
-.entry .hd b{font-size:14px}
-.entry ol{margin:0;padding-left:18px;font-size:12.5px;color:var(--dim)}
-.entry ol b{color:var(--ink);font-weight:600}
-.toolbar{display:flex;gap:12px;align-items:center;margin-top:16px;font-size:13px;color:var(--dim)}
-input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
-.dock{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);
-box-shadow:0 -6px 20px rgba(0,0,0,.08);padding:10px 16px;display:none}
-.dock.on{display:block}
-.dock .row{max-width:1280px;margin:0 auto;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;font-size:13px}
-.dock code{flex:1 1 420px;background:var(--chip);border-radius:6px;padding:8px 10px;font:12px ui-monospace,Menlo,monospace;
-overflow-x:auto;white-space:nowrap;color:var(--ink)}
-.dock select,.dock input{font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--ink)}
-.dock input{width:64px}
-button{font:inherit;font-weight:600;padding:6px 12px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
-button.ghost{background:transparent;color:var(--dim);border-color:var(--line)}
-.foot{color:var(--faint);font-size:12px;margin-top:28px;line-height:1.6}
+.tag.neutral,.tag.adj{background:var(--chip);color:var(--dim)}
+.tag.biased,.tag.warn{background:var(--warn-bg);color:var(--warn)}
+details.sharp{border-top:1px solid var(--line);font-size:12.5px;color:var(--dim)}
+details.sharp summary{padding:8px 14px 8px 50px;cursor:pointer;list-style:none;color:var(--faint)}
+details.sharp summary::-webkit-details-marker{display:none}
+details.sharp summary:after{content:" ▾"}
+details.sharp[open] summary:after{content:" ▴"}
+details.sharp div{padding:0 14px 10px 50px;line-height:1.6}
+.empty{background:var(--panel);border:1px dashed var(--line);border-radius:14px;padding:16px;color:var(--dim);font-size:14px}
+.empty.slim{padding:10px 14px;font-size:13px}
+.more{width:100%;margin-top:10px}
+.entry{padding:12px 14px}
+.entry .row1 b{font-size:15px}
+.entry ol{margin:6px 0 10px;padding-left:20px;font-size:13.5px;color:var(--dim)}
+.entry ol b{color:var(--ink)}
+button,.btn{font:inherit;font-weight:650;font-size:15px;border-radius:10px;border:1px solid var(--accent);background:var(--accent);
+color:var(--accent-ink);padding:10px 14px;min-height:44px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
+button.ghost,.btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+button.link{background:none;border:0;color:var(--accent);padding:6px 4px;min-height:0;font-weight:600}
+.btn.off{pointer-events:none;opacity:.4}
+#dock{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--panel);border-top:1px solid var(--line);
+box-shadow:var(--shadow);border-radius:16px 16px 0 0;transform:translateY(110%);transition:transform .18s ease}
+#dock.on{transform:none}
+.dock-in{max-width:640px;margin:0 auto;padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+.d1{display:flex;justify-content:space-between;align-items:center;font-weight:650}
+.d2{display:flex;gap:10px;margin-top:8px}
+.d2 select{flex:1;min-height:44px}
+.stepper{display:flex;align-items:center;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.stepper button{background:transparent;color:var(--ink);border:0;border-radius:0;min-width:44px;font-size:20px;padding:0}
+.stepper span{min-width:46px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
+.d3{margin-top:8px;font-size:13.5px;color:var(--dim);min-height:19px}
+.d4{display:flex;gap:8px;margin-top:10px}
+.d4 .btn,.d4 button{flex:1}
+.cmd{margin-top:8px;font:11.5px ui-monospace,Menlo,monospace;color:var(--faint);overflow-x:auto;white-space:nowrap}
+.foot{color:var(--faint);font-size:12.5px;margin-top:28px;line-height:1.6}
+table{border-collapse:collapse;width:100%;font-size:13.5px;font-variant-numeric:tabular-nums}
+th{text-align:left;font-weight:600;color:var(--dim);font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;padding:8px 10px;
+border-bottom:1px solid var(--line)}
+td{padding:8px 10px;border-bottom:1px solid var(--line)}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right}
+.tablewrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:14px}
 """
 
-JS = """
-const ENTRY_TYPES = __ENTRIES__;
-const ROOT = __ROOT__;
-const LEAGUE = __LEAGUE__;
-const BOARD = __BOARD__;
-const REPO = __REPO__;
-// Games that have started since this page was built can't be bet.
-const nowMs = Date.now();
-q('tr[data-start]').forEach(tr=>{ if(Date.parse(tr.dataset.start) <= nowMs){ tr.classList.add('gone'); } });
-const picked = new Map();
-function q(s, el){return (el||document).querySelectorAll(s)}
-function refresh(){
-  const dock = document.getElementById('dock');
-  dock.classList.toggle('on', picked.size>0);
-  if(!picked.size) return;
-  const books = new Set([...picked.values()].map(p=>p.book));
-  const book = books.size===1 ? [...books][0] : null;
-  const sel = document.getElementById('entry');
-  const types = book && ENTRY_TYPES[book] ? ENTRY_TYPES[book] : null;
-  const prev = sel.value;
-  sel.innerHTML = '';
-  if(types){
-    Object.entries(types).filter(([id,e])=>e.picks===picked.size).forEach(([id,e])=>{
-      const o=document.createElement('option'); o.value=id; o.textContent=e.label; sel.appendChild(o);});
-    if([...sel.options].some(o=>o.value===prev)) sel.value=prev;
-  }
-  sel.style.display = types ? '' : 'none';
-  const codes=[...picked.keys()].join(' ');
-  const stake = document.getElementById('stake').value||1;
-  let args = 'bet '+LEAGUE+' '+codes;
-  let msg = '';
-  if(types){
-    if(!sel.options.length){ msg = 'No '+book+' entry takes '+picked.size+' picks'; }
-    else args += ' --entry '+sel.value;
-  } else if(books.size>1 && [...books].some(b=>ENTRY_TYPES[b])){ msg='Pick\\'em entries must be one app'; }
-  args += ' --stake '+stake+' --board '+BOARD;
-  const cmd = 'cd "'+ROOT+'" && python3 edgefinder.py '+args;
-  document.getElementById('cmd').textContent = msg ? msg : (REPO ? args : cmd);
-  document.getElementById('count').textContent = picked.size+' selected';
-  const log = document.getElementById('log');
-  if(REPO && log){
-    const title = 'bet '+LEAGUE+' #'+codes.split(' ').join(' #')+(sel.value&&types?' '+sel.value:'')+' $'+stake;
-    const body = '```\\n'+args+'\\n```\\nSubmit this issue to log the bet. Edge Finder replies here in a minute or two.';
-    log.href = 'https://github.com/'+REPO+'/issues/new?title='+encodeURIComponent(title)+'&body='+encodeURIComponent(body);
-    log.classList.toggle('off', !!msg);
-  }
-}
-q('input.pick').forEach(cb=>cb.addEventListener('change',e=>{
-  const tr=cb.closest('tr');
-  if(cb.checked) picked.set(cb.dataset.code,{book:cb.dataset.book}); else picked.delete(cb.dataset.code);
-  tr.classList.toggle('sel',cb.checked); refresh();
-}));
-document.getElementById('entry').addEventListener('change',refresh);
-document.getElementById('stake').addEventListener('input',refresh);
-document.getElementById('clear').addEventListener('click',()=>{
-  picked.clear(); q('input.pick').forEach(cb=>{cb.checked=false;cb.closest('tr').classList.remove('sel')}); refresh();});
-document.getElementById('copy').addEventListener('click',async()=>{
-  const t=document.getElementById('cmd').textContent;
-  try{await navigator.clipboard.writeText(t);document.getElementById('copy').textContent='Copied';
-    setTimeout(()=>document.getElementById('copy').textContent='Copy',1200);}catch(e){}
-});
-document.getElementById('showall').addEventListener('change',e=>document.body.classList.toggle('showall',e.target.checked));
-q('th[data-k]').forEach(th=>th.addEventListener('click',()=>{
-  const table=th.closest('table'), tb=table.tBodies[0], i=[...th.parentNode.children].indexOf(th);
-  const dir = th.dataset.dir==='desc' ? 'asc' : 'desc'; th.dataset.dir=dir;
-  const rows=[...tb.rows].sort((a,b)=>{
-    const x=a.cells[i].dataset.v, y=b.cells[i].dataset.v;
-    const nx=parseFloat(x), ny=parseFloat(y);
-    const c = (!isNaN(nx)&&!isNaN(ny)) ? nx-ny : String(x).localeCompare(String(y));
-    return dir==='asc'?c:-c;});
-  rows.forEach(r=>tb.appendChild(r));
-}));
-"""
+ICONS = """<meta name="theme-color" content="#f4f3ef" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1113" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Edge Finder">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">"""
+
+
+def head(title, web=True):
+    return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
+            '<title>%s</title>%s<style>%s</style></head>' % (E(title), ICONS if web else "", CSS))
+
+
+def nav_html(active, web):
+    links = [("index", "Home"), ("nba", "NBA"), ("nfl", "NFL"), ("bets", "Bets & CLV")]
+    return '<nav class="top">%s</nav>' % "".join(
+        '<a href="%s.html"%s>%s</a>' % (k, ' class="on"' if k == active else "", E(t)) for k, t in links)
+
+
+# --------------------------------------------------------------- small table helpers (Bets page)
 
 
 def _td(text, v=None, cls=None):
@@ -165,144 +152,41 @@ def _td(text, v=None, cls=None):
     return "<td%s>%s</td>" % (attrs, text)
 
 
-def _pick_text(x):
-    side = "Over" if x["side"] == "over" else "Under"
-    s = "%s %g" % (side, x["point"])
-    if x["book"] == "kalshi":
-        s = ("YES %g+" if x["side"] == "over" else "NO %g+") % (x["point"] + 0.5)
-    return s
-
-
-def _adj(x):
-    if x["exact"]:
-        return ""
-    return ' <span class="tag adj" title="A sharp line differs from this one by up to %g; its price was moved to this line">adj %g</span>' % (x["gap"], x["gap"])
-
-
-def _ge_cell(x):
-    if x.get("ge_p") is None:
-        return _td('<span class="tag neutral">—</span>', -1)
-    tag = x["ge_tag"]
-    label = {"agree": "agrees", "conflict": "check news", "neutral": "neutral", "biased": "runs high"}[tag]
-    score = (" · EDGE %d" % x["ge_score"]) if x.get("ge_score") is not None else ""
-    return _td('%s <span class="tag %s">%s</span><br><span class="sub">%s</span>' % (
-        pct(x["ge_p"], 0), tag, label, score.strip(" ·")), round(x["ge_p"], 4))
-
-
-def _tr(x, cells):
-    return '<tr class="%s" data-start="%s">%s</tr>' % ("" if x["flagged"] else "dim", E(x["commence"] or ""),
-                                                      "".join(cells))
-
-
-def _common(x):
-    return [
-        _td('<input type="checkbox" class="pick" data-code="%s" data-book="%s">' % (x["code"], x["book"])),
-        _td(x["code"], int(x["code"]), "code"),
-        _td(E(x["player"]), x["player"], "player"),
-        _td('%s<br><span class="sub">%s</span>' % (E(x["game"]), E(local_label(x["commence"]))), x["commence"]),
-        _td(E(market_label(x["market"])), x["market"]),
-    ]
-
-
-def _table(head, rows, empty):
+def _table(head_cells, rows, empty):
     if not rows:
-        return '<div class="tablewrap"><div class="empty">%s</div></div>' % empty
-    ths = "".join('<th%s data-k="1">%s</th>' % (' class="num"' if n else "", h) if h else "<th></th>"
-                  for h, n in head)
-    return '<div class="tablewrap"><table><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>' % (
-        ths, "".join(rows))
+        return '<div class="empty">%s</div>' % empty
+    ths = "".join('<th%s>%s</th>' % (' class="num"' if n else "", h) for h, n in head_cells)
+    return '<div class="tablewrap"><table><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>' % (ths, "".join(rows))
 
 
-def pickem_table(board, nfl):
-    head = [("", 0), ("#", 0), ("Player", 0), ("Game", 0), ("Market", 0), ("App", 0), ("Pick", 0),
-            ("Fair", 1), ("Lowest bar", 1), ("Edge", 1), ("Clears", 0)]
-    if nfl:
-        head.append(("Gridiron Edge", 0))
-    head.append(("Sharp lines", 0))
-    rows = []
-    for x in board["pickem"]:
-        cells = _common(x)
-        mult = (" ×%g" % x["multiplier"]) if x["multiplier"] and abs(x["multiplier"] - 1) > 1e-9 else ""
-        cells += [
-            _td(E(BOOK_LABELS.get(x["book"], x["book"])), x["book"]),
-            _td(E(_pick_text(x)) + mult + _adj(x), x["point"]),
-            _td(pct(x["p"]), round(x["p"], 4), "num"),
-            _td(pct(x["breakeven"]), round(x["breakeven"] or 0, 4), "num"),
-            _td('<span class="%s">%+.1f</span>' % ("pos" if x["edge"] > 0 else "neg", x["edge"] * 100),
-                round(x["edge"], 4), "num"),
-            _td(E(", ".join(x["clears"])) or '<span class="sub">—</span>', len(x["clears"])),
-        ]
-        if nfl:
-            cells.append(_ge_cell(x))
-        cells.append(_td(E(x["sharp"]), x["n_sharp"], "sharp"))
-        rows.append(_tr(x, cells))
-    return _table(head, rows, "No pick'em lines matched a sharp price in this pull.")
+# --------------------------------------------------------------- board data
 
 
-def fliff_table(board, nfl):
-    head = [("", 0), ("#", 0), ("Player", 0), ("Game", 0), ("Market", 0), ("Pick", 0), ("Fliff", 1),
-            ("Fair", 1), ("EV", 1)]
-    if nfl:
-        head.append(("Gridiron Edge", 0))
-    head.append(("Sharp lines", 0))
-    rows = []
-    for x in board["fliff"]:
-        cells = _common(x) + [
-            _td(E(_pick_text(x)) + _adj(x), x["point"]),
-            _td(fmt_american(x["price"]), x["price"], "num"),
-            _td(pct(x["p"]), round(x["p"], 4), "num"),
-            _td('<span class="%s">%+.1f%%</span>' % ("pos" if x["ev"] > 0 else "neg", x["ev"] * 100),
-                round(x["ev"], 4), "num"),
-        ]
-        if nfl:
-            cells.append(_ge_cell(x))
-        cells.append(_td(E(x["sharp"]), x["n_sharp"], "sharp"))
-        rows.append(_tr(x, cells))
-    return _table(head, rows, "No Fliff lines in this pull (check Fliff is in the Odds API response).")
+def _pick_text(x):
+    if x["book"] == "kalshi":
+        return ("YES %g+" if x["side"] == "over" else "NO on %g+") % (x["point"] + 0.5)
+    return "%s %g" % ("Over" if x["side"] == "over" else "Under", x["point"])
 
 
-def kalshi_table(board, nfl):
-    head = [("", 0), ("#", 0), ("Player", 0), ("Game", 0), ("Market", 0), ("Contract", 0), ("Ask", 1),
-            ("Fee", 1), ("Fair", 1), ("EV/contract", 1), ("ROI", 1), ("Size", 1)]
-    if nfl:
-        head.append(("Gridiron Edge", 0))
-    head.append(("Sharp lines", 0))
-    rows = []
-    for x in board["kalshi"]:
-        cells = _common(x) + [
-            _td(E(_pick_text(x)) + _adj(x), x["point"]),
-            _td("%.0f¢" % (x["ask"] * 100), x["ask"], "num"),
-            _td("%.1f¢" % (x["fee"] * 100), x["fee"], "num"),
-            _td(pct(x["p"]), round(x["p"], 4), "num"),
-            _td('<span class="%s">%+.1f¢</span>' % ("pos" if x["ev"] > 0 else "neg", x["ev"] * 100),
-                round(x["ev"], 4), "num"),
-            _td('<span class="%s">%+.1f%%</span>' % ("pos" if x["roi"] > 0 else "neg", x["roi"] * 100),
-                round(x["roi"], 4), "num"),
-            _td("%g" % x["size"] if x["size"] is not None else "—", x["size"] or 0, "num"),
-        ]
-        if nfl:
-            cells.append(_ge_cell(x))
-        cells.append(_td(E(x["sharp"]), x["n_sharp"], "sharp"))
-        rows.append(_tr(x, cells))
-    return _table(head, rows, "No Kalshi ladders matched a sharp price.")
+SHOW_ALL_LIMIT = 150   # per section, so "All" stays quick on a phone
 
 
-def entries_html(board):
-    good = [e for e in board["entries"] if e["roi"] > 0]
-    if not good:
-        return '<div class="tablewrap"><div class="empty">No entry built from tonight\'s flagged picks shows a profit.</div></div>'
-    cards = []
-    for e in good[:6]:
-        legs = "".join("<li><b>#%s %s</b> %s %s · %s</li>" % (
-            l["code"], E(l["player"]), E(_pick_text(l)), E(market_label(l["market"])), pct(l["p"]))
-            for l in e["legs"])
-        verify = ' <span class="tag biased" title="Payout table not confirmed - check the app">verify payout</span>' if e["verify"] else ""
-        cards.append(
-            '<div class="entry"><div class="hd"><b>%s</b><span class="%s">%+.1f%% expected</span></div>'
-            '<div class="sub" style="margin-bottom:6px">%s%s</div><ol>%s</ol></div>' % (
-                E(e["label"]), "pos" if e["roi"] > 0 else "neg", e["roi"] * 100,
-                E(BOOK_LABELS.get(e["book"], e["book"])), verify, legs))
-    return '<div class="entries">%s</div>' % "".join(cards)
+def _row(x, sec, nfl):
+    d = {"c": x["code"], "s": sec, "f": bool(x["flagged"]), "b": x["book"],
+         "bl": BOOK_LABELS.get(x["book"], x["book"]), "pl": x["player"], "g": x["game"], "t": x["commence"],
+         "m": market_label(x["market"]), "pk": _pick_text(x), "p": round(x["p"], 4), "ex": bool(x["exact"]),
+         "gap": x["gap"], "n": x["n_sharp"], "sh": x["sharp"]}
+    if sec == "pickem":
+        d.update(bar=round(x["breakeven"] or 0, 4), v=round(x["edge"] or 0, 4), cl=x["clears"])
+        if x["multiplier"] and abs(x["multiplier"] - 1) > 1e-9:
+            d["mu"] = x["multiplier"]
+    elif sec == "fliff":
+        d.update(pr=fmt_american(x["price"]), v=round(x["ev"], 4))
+    else:
+        d.update(ask=x["ask"], fee=round(x["fee"], 4), ev=round(x["ev"], 4), v=round(x["roi"], 4), sz=x["size"])
+    if nfl and x.get("ge_p") is not None:
+        d.update(gp=round(x["ge_p"], 3), gt=x["ge_tag"], gs=x.get("ge_score"))
+    return d
 
 
 def notes(board, cfg):
@@ -310,111 +194,310 @@ def notes(board, cfg):
     counts = board["counts"]
     for b in cfg.pickem_books + cfg.sportsbooks:
         if not counts.get(b):
-            out.append("No %s lines came back in this pull. The free Odds API plan may not include it, or it hasn't posted lines yet." % BOOK_LABELS.get(b, b))
+            out.append("No %s lines in the latest pull (not posted yet, or not in the feed)." % BOOK_LABELS.get(b, b))
     if not any(counts.get(b) for b in cfg.sharp_weights):
         out.append("No sharp-book prices came back, so nothing could be priced.")
     for book in cfg.pickem_books:
         if any(e.get("verify") for e in cfg.entries(book).values()):
-            out.append("%s payouts in config.json are placeholders. Check the app and fix them before trusting its breakevens." % BOOK_LABELS.get(book, book))
+            out.append("%s payouts in config.json are placeholders - check the app and fix them." % BOOK_LABELS.get(book, book))
     if board["league"] == "nfl":
         if not board["ge_rows"]:
-            out.append("No Gridiron Edge export loaded. In Gridiron Edge, click Export for Edge Finder, then run ge-import.")
+            out.append("No Gridiron Edge read loaded yet. On game days it loads itself; or upload an export to the repo's inputs folder.")
         else:
-            out.append("Gridiron Edge is a second opinion only. 'Runs high' marks markets where its median is known to sit too high (Pass Yds, Pass+Rush, Rush+Rec, RB receptions, TE Rec Yds).")
-    out.append("Entries assume picks are independent. Same-game picks are kept apart for that reason.")
-    return "".join("<li>%s</li>" % E(n) for n in out)
+            out.append("Gridiron Edge is a second opinion only. 'runs high' marks markets where its median sits too high "
+                       "(Pass Yds, Pass+Rush, Rush+Rec, RB receptions, TE Rec Yds).")
+    out.append("Entries assume picks are independent, so suggested entries use one pick per game.")
+    return out
+
+
+def payload(board, cfg, root, web):
+    nfl = board["league"] == "nfl"
+    rows = []
+    for sec in ("pickem", "fliff", "kalshi"):
+        items = board[sec]
+        keep = [x for x in items if x["flagged"]]
+        rest = [x for x in items if not x["flagged"]][:SHOW_ALL_LIMIT]
+        rows += [_row(x, sec, nfl) for x in keep + rest]
+    entries = [{"b": e["book"], "bl": BOOK_LABELS.get(e["book"], e["book"]), "id": e["entry"], "label": e["label"],
+                "roi": round(e["roi"], 4), "verify": e["verify"], "legs": [l["code"] for l in e["legs"]]}
+               for e in board["entries"] if e["roi"] > 0][:6]
+    types = {b: {k: {"label": v["label"], "picks": v["picks"], "pays": v["pays"]} for k, v in cfg.entries(b).items()}
+             for b in cfg.pickem_books}
+    th = cfg["thresholds"]
+    be = []
+    for book, t in board["breakevens"].items():
+        be.append("%s: %s" % (BOOK_LABELS.get(book, book), ", ".join(
+            "%s %s" % (e["label"].split(" ", 1)[-1], pct(b)) for _, (e, b) in sorted(t.items(), key=lambda q: q[1][1]))))
+    pull = board["pull"]
+    return {
+        "league": board["league"], "nfl": nfl, "built": board["built_at"], "pulled": pull["ts"],
+        "credits": pull.get("credits_remaining"), "repo": web["repo"] if web else None, "root": root,
+        "rows": rows, "entries": entries, "types": types, "notes": notes(board, cfg), "be": " · ".join(be),
+        "counts": {b: board["counts"].get(b, 0) for b in ("prizepicks", "underdog", "fliff", "kalshi")},
+        "geSaved": board.get("ge_saved"), "games": board["games"],
+        "th": {"cush": th["pickem_cushion"], "fliff": th["fliff_min_ev"], "kalshi": th["kalshi_min_ev"],
+               "kc": cfg["kalshi"]["contracts"], "kmin": cfg["kalshi"].get("min_size", 0),
+               "minb": 1 if th.get("one_book_ok") else th["min_sharp_books"]},
+        "offsets": cfg.get("auto", {}).get("board_offsets_min", [90, 30]),
+    }
+
+
+# --------------------------------------------------------------- page
+
+BODY = """<body>
+<header class="bar"><div class="wrap">
+%(nav)s
+<div class="controls">
+<div class="seg" id="view"><button data-v="flag" class="on">Flagged&nbsp;<span id="nflag"></span></button><button data-v="all">All</button></div>
+<button class="chip on" data-app="all">All apps</button>
+<button class="chip" data-app="prizepicks">PrizePicks</button>
+<button class="chip" data-app="underdog">Underdog</button>
+<button class="chip" data-app="fliff">Fliff</button>
+<button class="chip" data-app="kalshi">Kalshi</button>
+<select id="sort" aria-label="Sort"><option value="v">Best value</option><option value="t">Start time</option><option value="pl">Player</option></select>
+</div></div></header>
+<main class="wrap">
+<h1 id="title"></h1>
+<div class="sub" id="when"></div>
+<div class="stats" id="stats"></div>
+<details class="notes" id="notes"><summary></summary><ul></ul></details>
+<section id="sec-entries"><h2>Best entries <small>top flagged picks on one app, one per game</small></h2><div class="grid" id="entries"></div></section>
+<section id="sec-pickem"><h2>Pick'em <small id="h-pickem"></small></h2><div class="grid" id="pickem"></div></section>
+<section id="sec-fliff"><h2>Fliff <small id="h-fliff"></small></h2><div class="grid" id="fliff"></div></section>
+<section id="sec-kalshi"><h2>Kalshi <small id="h-kalshi"></small></h2><div class="grid" id="kalshi"></div></section>
+<div class="foot" id="foot"></div>
+</main>
+<div id="dock" aria-live="polite"><div class="dock-in">
+<div class="d1"><span id="dsum"></span><button class="link" id="clear">Clear</button></div>
+<div class="d2"><select id="entry" aria-label="Entry type"></select>
+<div class="stepper"><button id="minus" aria-label="Less">−</button><span>$<b id="stake">1</b></span><button id="plus" aria-label="More">+</button></div></div>
+<div class="d3" id="dexp"></div>
+<div class="d4">%(primary)s<button class="ghost" id="copy">Copy</button></div>
+<div class="cmd" id="cmd"></div>
+</div></div>
+<script>const D = %(data)s;</script>
+<script>%(js)s</script>
+</body></html>"""
+
+JS = r"""
+(function(){
+const $ = (s, el) => (el || document).querySelector(s);
+const $$ = (s, el) => [...(el || document).querySelectorAll(s)];
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pct = (p, d = 1) => (p * 100).toFixed(d) + '%';
+const sgn = (x, d = 1) => (x >= 0 ? '+' : '') + x.toFixed(d);
+const now = Date.now();
+const live = D.rows.filter(r => !r.t || Date.parse(r.t) > now);
+const byCode = new Map(live.map(r => [r.c, r]));
+const LG = D.league.toUpperCase();
+let view = 'flag', app = 'all', sort = 'v';
+const picked = new Map();
+let stake = 1;
+try { stake = Math.max(1, parseInt(localStorage.getItem('ef-stake') || '1', 10) || 1); } catch (e) {}
+
+function ago(iso) {
+  const m = Math.round((now - Date.parse(iso)) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min ago';
+  const h = Math.floor(m / 60);
+  return h + 'h ' + (m % 60) + 'm ago';
+}
+function when(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, {weekday: 'short'}) + ' ' + d.toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
+}
+
+// ---------- header
+$('#title').textContent = 'Edge Finder · ' + LG;
+$('#when').innerHTML = 'Lines pulled ' + esc(ago(D.pulled)) + ' · page built ' + esc(ago(D.built)) +
+  ' · <button class="link" onclick="location.reload()">Reload</button>';
+const flagged = live.filter(r => r.f).length;
+const st = [`<b>${flagged}</b> flagged`, `<b>${D.games}</b> games`];
+if (D.credits != null) st.push(`<b>${D.credits}</b> credits left`);
+$('#stats').innerHTML = st.map(s => `<span class="stat">${s}</span>`).join('');
+if (D.notes.length) {
+  $('#notes summary').textContent = 'Notes (' + D.notes.length + ')';
+  $('#notes ul').innerHTML = D.notes.map(n => `<li>${esc(n)}</li>`).join('');
+} else $('#notes').remove();
+$('#h-pickem').textContent = `flagged when fair beats an entry's per-pick breakeven by ${(D.th.cush*100).toFixed(0)}+ pt`;
+$('#h-fliff').textContent = `flagged at ${(D.th.fliff*100).toFixed(0)}%+ expected value`;
+$('#h-kalshi').textContent = `after the fee on ${D.th.kc} contracts; flagged at ${(D.th.kalshi*100).toFixed(0)}%+ return with ${D.th.kmin}+ on offer`;
+const counts = Object.entries(D.counts).map(([b, n]) => `${{prizepicks:'PrizePicks',underdog:'Underdog',fliff:'Fliff',kalshi:'Kalshi'}[b]} ${n}`).join(' · ');
+$('#foot').innerHTML = `Lines in the latest pull: ${esc(counts)}.<br>Per-pick breakevens: ${esc(D.be)}.<br>Fair = the sharp books' chance of the pick hitting, margin removed, using the
+  less generous of two methods. <span class="tag adj">adj</span> = a sharp line sat a little off this one and its price was moved here;
+  those take an extra cut before they can flag. Lines need ${D.th.minb} sharp books. Judge it by closing line value, not early wins.`;
+
+// ---------- cards
+function card(r) {
+  let big, what, meta;
+  if (r.s === 'pickem') {
+    big = `<span class="big ${r.v >= 0 ? 'pos' : 'neg'}">${sgn(r.v * 100)}<small>pts</small></span>`;
+    what = `<b>${esc(r.pk)}</b> ${esc(r.m)} · ${esc(r.bl)}${r.mu ? ' ×' + r.mu : ''}`;
+    meta = `Fair ${pct(r.p)} · bar ${pct(r.bar)}${r.cl.length ? ' · clears ' + esc(r.cl.join(', ')) : ''}`;
+  } else if (r.s === 'fliff') {
+    big = `<span class="big ${r.v >= 0 ? 'pos' : 'neg'}">${sgn(r.v * 100)}%<small>EV</small></span>`;
+    what = `<b>${esc(r.pk)}</b> ${esc(r.m)} · Fliff ${esc(r.pr)}`;
+    meta = `Fair ${pct(r.p)}`;
+  } else {
+    big = `<span class="big ${r.v >= 0 ? 'pos' : 'neg'}">${sgn(r.v * 100)}%<small>ROI</small></span>`;
+    what = `<b>${esc(r.pk)}</b> ${esc(r.m)} · Kalshi ${Math.round(r.ask * 100)}¢`;
+    meta = `Fair ${pct(r.p)} · fee ${(r.fee * 100).toFixed(1)}¢ · ${r.sz == null ? '?' : Math.floor(r.sz)} on offer`;
+  }
+  let ge = '';
+  if (D.nfl) {
+    if (r.gp != null) {
+      const lab = {agree: 'agrees', conflict: 'check news', neutral: 'neutral', biased: 'runs high'}[r.gt];
+      ge = `<div class="meta">Gridiron Edge ${pct(r.gp, 0)} <span class="tag ${r.gt}">${lab}</span>${r.gs != null ? ' · EDGE ' + Math.round(r.gs) : ''}</div>`;
+    } else ge = `<div class="meta dim">No Gridiron Edge read</div>`;
+  }
+  const adj = r.ex ? '' : ` · <span class="tag adj">adj ${r.gap}</span>`;
+  const on = picked.has(r.c) ? ' on' : '';
+  return `<div class="card${on}${r.f ? '' : ' dimrow'}" data-c="${esc(r.c)}">
+<label class="pick"><input type="checkbox" ${on ? 'checked' : ''} aria-label="Select ${esc(r.pl)}"><span class="box"></span>
+<div class="main"><div class="row1"><span class="who">${esc(r.pl)}</span>${big}</div>
+<div class="what">${what}</div><div class="meta">${meta}</div>${ge}
+<div class="meta dim">#${esc(r.c)} · ${esc(r.g)} · ${esc(when(r.t))}${adj}</div></div></label>
+<details class="sharp"><summary>Sharp lines (${r.n})</summary><div>${esc(r.sh).replace(/ · /g, '<br>')}</div></details></div>`;
+}
+
+const EMPTY = {
+  pickem: `Nothing clears the bar yet. Pick'em edges tend to show up around lineup news; each game is re-pulled about ${D.offsets[D.offsets.length - 1]} min before tip.`,
+  fliff: 'Nothing beats the sharp market by enough right now.',
+  kalshi: 'Nothing clears the bar with enough on offer right now.',
+};
+const shown = {pickem: 40, fliff: 40, kalshi: 40};
+
+function draw() {
+  const rows = live.filter(r => (view === 'all' || r.f) && (app === 'all' || r.b === app));
+  const cmp = {v: (a, b) => b.v - a.v, t: (a, b) => (a.t || '').localeCompare(b.t || '') || b.v - a.v,
+               pl: (a, b) => a.pl.localeCompare(b.pl)}[sort];
+  $('#nflag').textContent = flagged;
+  // Sections with something to show go first; empty ones drop to the bottom as one line.
+  const secs = ['pickem', 'fliff', 'kalshi'];
+  const counts = Object.fromEntries(secs.map(sec => [sec, rows.filter(r => r.s === sec).length]));
+  const foot = $('#foot');
+  [...secs].sort((a, b) => (counts[b] > 0) - (counts[a] > 0)).forEach(sec => foot.parentNode.insertBefore($('#sec-' + sec), foot));
+  for (const sec of secs) {
+    const list = rows.filter(r => r.s === sec).sort(cmp);
+    const el = $('#' + sec);
+    const section = $('#sec-' + sec);
+    const hideSec = app !== 'all' && !list.length && !live.some(r => r.s === sec && r.b === app);
+    section.style.display = hideSec ? 'none' : '';
+    if (!list.length) { el.innerHTML = `<div class="empty slim">${EMPTY[sec]}</div>`; continue; }
+    const n = shown[sec];
+    el.innerHTML = list.slice(0, n).map(card).join('') +
+      (list.length > n ? `<button class="ghost more" data-more="${sec}">Show ${Math.min(40, list.length - n)} more of ${list.length - n}</button>` : '');
+  }
+  const ents = D.entries.filter(e => (app === 'all' || e.b === app) && e.legs.every(c => byCode.has(c)));
+  $('#sec-entries').style.display = ents.length ? '' : 'none';
+  $('#entries').innerHTML = ents.map(e => `<div class="card entry"><div class="row1"><b>${esc(e.label)}</b>
+<span class="big pos">${sgn(e.roi * 100)}%<small>exp.</small></span></div>
+<div class="meta">${esc(e.bl)}${e.verify ? ' <span class="tag warn">verify payout</span>' : ''}</div>
+<ol>${e.legs.map(c => { const r = byCode.get(c); return `<li><b>${esc(r.pl)}</b> ${esc(r.pk)} ${esc(r.m)} · ${pct(r.p)}</li>`; }).join('')}</ol>
+<button class="ghost" data-entry="${esc(e.id)}" data-legs="${esc(e.legs.join(','))}" style="width:100%">Select these ${e.legs.length}</button></div>`).join('');
+}
+
+document.addEventListener('change', ev => {
+  const cb = ev.target.closest('label.pick input');
+  if (!cb) return;
+  const cardEl = cb.closest('.card');
+  const c = cardEl.dataset.c;
+  if (cb.checked) picked.set(c, byCode.get(c)); else picked.delete(c);
+  cardEl.classList.toggle('on', cb.checked);
+  dock();
+});
+document.addEventListener('click', ev => {
+  const more = ev.target.closest('[data-more]');
+  if (more) { shown[more.dataset.more] += 40; draw(); return; }
+  const sel = ev.target.closest('[data-legs]');
+  if (sel) {
+    picked.clear();
+    sel.dataset.legs.split(',').forEach(c => picked.set(c, byCode.get(c)));
+    draw(); dock(sel.dataset.entry);
+  }
+});
+$$('#view button').forEach(b => b.onclick = () => { view = b.dataset.v; $$('#view button').forEach(x => x.classList.toggle('on', x === b)); draw(); });
+$$('[data-app]').forEach(b => b.onclick = () => { app = b.dataset.app; $$('[data-app]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
+$('#sort').onchange = e => { sort = e.target.value; draw(); };
+
+// ---------- bottom sheet
+function pbin(ps) { let d = [1]; for (const p of ps) { const n = new Array(d.length + 1).fill(0); d.forEach((v, k) => { n[k] += v * (1 - p); n[k + 1] += v * p; }); d = n; } return d; }
+function entryReturn(ps, pays, boost) { return pbin(ps).reduce((s, v, k) => s + v * (+(pays[String(k)] || 0)) * (k === ps.length ? boost : 1), 0); }
+
+let args = '';
+function dock(preferEntry) {
+  const on = picked.size > 0;
+  $('#dock').classList.toggle('on', on);
+  document.body.classList.toggle('docked', on);
+  if (!on) return;
+  $('#stake').textContent = stake;
+  const legs = [...picked.values()];
+  const books = new Set(legs.map(r => r.b));
+  const book = books.size === 1 ? [...books][0] : null;
+  const types = book && D.types[book];
+  const sel = $('#entry');
+  const prev = preferEntry || sel.value;
+  sel.innerHTML = '';
+  let msg = '', exp = '';
+  if (types) {
+    Object.entries(types).filter(([, e]) => e.picks === legs.length).forEach(([id, e]) => {
+      const o = document.createElement('option'); o.value = id; o.textContent = e.label; sel.appendChild(o);
+    });
+    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+    if (!sel.options.length) msg = `${legs[0].bl} has no entry with ${legs.length} pick${legs.length > 1 ? 's' : ''}`;
+    else {
+      const e = types[sel.value];
+      const boost = legs.reduce((b, r) => b * (r.mu || 1), 1);
+      const ret = entryReturn(legs.map(r => r.p), e.pays, boost);
+      const games = new Set(legs.map(r => r.g)).size;
+      exp = `Expected return <b class="${ret >= 1 ? 'pos' : 'neg'}">${sgn((ret - 1) * 100)}%</b> on ${e.label}` +
+            (games < legs.length ? ' · <span class="tag warn">same-game picks</span>' : '');
+    }
+  } else if ([...books].some(b => D.types[b])) {
+    msg = "A pick'em entry has to be all on one app";
+  } else {
+    const avg = legs.reduce((s, r) => s + r.v, 0) / legs.length;
+    exp = `${legs.length} separate bet${legs.length > 1 ? 's' : ''} · avg ${legs[0].s === 'kalshi' && books.size === 1 ? 'return' : 'value'} <b class="${avg >= 0 ? 'pos' : 'neg'}">${sgn(avg * 100)}%</b>`;
+  }
+  sel.style.display = types && sel.options.length ? '' : 'none';
+  $('#dsum').textContent = `${legs.length} pick${legs.length > 1 ? 's' : ''}` + (book ? ' · ' + legs[0].bl : '');
+  $('#dexp').innerHTML = msg ? `<span class="neg">${esc(msg)}</span>` : exp;
+  args = `bet ${D.league} ${[...picked.keys()].join(' ')}` + (types && sel.value ? ` --entry ${sel.value}` : '') +
+         ` --stake ${stake} --board ${D.built}`;
+  $('#cmd').textContent = D.repo ? args : `cd "${D.root}" && python3 edgefinder.py ${args}`;
+  const log = $('#log');
+  if (log) {
+    const body = '```\n' + args + '\n```\nSubmit this issue to log the bet. Edge Finder replies here in a minute or two.';
+    log.href = `https://github.com/${D.repo}/issues/new?title=${encodeURIComponent(args)}&body=${encodeURIComponent(body)}`;
+    log.classList.toggle('off', !!msg);
+  }
+}
+$('#entry').onchange = () => dock();
+const setStake = v => { stake = Math.max(1, Math.min(100, v)); try { localStorage.setItem('ef-stake', stake); } catch (e) {} dock(); };
+$('#minus').onclick = () => setStake(stake - 1);
+$('#plus').onclick = () => setStake(stake + 1);
+$('#clear').onclick = () => { picked.clear(); draw(); dock(); };
+$('#copy').onclick = async () => {
+  const t = $('#cmd').textContent;
+  try { await navigator.clipboard.writeText(t); $('#copy').textContent = 'Copied'; setTimeout(() => $('#copy').textContent = 'Copy', 1200); } catch (e) {}
+};
+draw(); dock();
+})();
+"""
 
 
 def render(board, cfg, root, web=None):
     """web: {'repo': 'owner/name'} for the GitHub Pages version (Log button opens an issue)."""
-    lg = board["league"]
-    nfl = lg == "nfl"
-    pull = board["pull"]
-    built = local(parse_iso(board["built_at"]))
-    pulled = local(parse_iso(pull["ts"]))
-    flagged = sum(1 for s in ("pickem", "fliff", "kalshi") for x in board[s] if x["flagged"])
-    total = sum(len(board[s]) for s in ("pickem", "fliff", "kalshi"))
-    chips = [
-        "<b>%d</b> flagged of %d priced" % (flagged, total),
-        "<b>%d</b> games" % board["games"],
-        "pulled <b>%s</b>" % pulled.strftime("%a %I:%M %p").replace(" 0", " "),
-    ]
-    if pull.get("credits_remaining") is not None:
-        chips.append("<b>%s</b> Odds API credits left" % pull["credits_remaining"])
-    for b in ("prizepicks", "underdog", "fliff", "kalshi"):
-        chips.append("%s <b>%d</b>" % (BOOK_LABELS[b], board["counts"].get(b, 0)))
-    if nfl and board["ge_saved"]:
-        chips.append("Gridiron Edge scan <b>%s</b>" % local(parse_iso(board["ge_saved"])).strftime("%a %m/%d"))
-
-    be_lines = []
-    for book, types in board["breakevens"].items():
-        be_lines.append("%s: %s" % (BOOK_LABELS.get(book, book), ", ".join(
-            "%s %s" % (e["label"].split(" ", 1)[-1], pct(b)) for _, (e, b) in sorted(types.items(), key=lambda t: t[1][1]))))
-
-    entry_types = {b: {k: {"label": v["label"], "picks": v["picks"]} for k, v in cfg.entries(b).items()}
-                   for b in cfg.pickem_books}
-    js = (JS.replace("__ENTRIES__", json.dumps(entry_types))
-            .replace("__ROOT__", json.dumps(root))
-            .replace("__LEAGUE__", json.dumps(lg))
-            .replace("__BOARD__", json.dumps(board["built_at"]))
-            .replace("__REPO__", json.dumps(web["repo"] if web else None)))
-    th = cfg["thresholds"]
-    page = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Edge Finder %(LG)s</title><style>%(css)s</style></head><body>
-<div class="wrap">
-%(nav)s<h1>Edge Finder · %(LG)s</h1>
-<div class="sub">Built %(built)s. Lines are priced against the sharp books' fair odds (margin removed). Place every bet by hand.</div>
-<div class="chips">%(chips)s</div>
-<ul class="notes">%(notes)s</ul>
-<div class="toolbar"><label><input type="checkbox" id="showall"> Show every priced line, not just flagged</label></div>
-
-<h2>Best entries tonight <small>top flagged picks per app, one per game</small></h2>
-%(entries)s
-
-<h2>Pick'em <small>flagged when fair odds beat an entry's per-pick breakeven by %(cush)s+. Lowest bar = the easiest entry on that app; Clears = every entry it beats</small></h2>
-%(pickem)s
-<div class="sub" style="margin-top:6px">Per-pick breakevens: %(be)s</div>
-
-<h2>Fliff <small>flagged at %(fev)s+ expected value</small></h2>
-%(fliff)s
-
-<h2>Kalshi <small>after the taker fee on %(kc)d contracts; flagged at %(kev)s+ return</small></h2>
-%(kalshi)s
-
-<div class="foot">Fair = the sharp books' consensus chance after removing their margin, using whichever of two
-de-vig methods is less generous to your side. "adj" means a sharp line sat a little off this one and its price was moved
-to this line using the stat's typical spread; those rows take a further cut before they can be flagged, bigger the further
-the move. Kalshi rows need at least %(kmin)s contracts on offer. Rows need %(minb)s sharp book(s). Judge results by closing line value
-(%(clvref)s), not early wins and losses.</div>
-</div>
-<div class="dock" id="dock"><div class="row">
-<span id="count"></span>
-<select id="entry"></select>
-<label>Stake $ <input id="stake" type="number" min="1" step="1" value="1"></label>
-%(logbtn)s<code id="cmd"></code>
-<button id="copy" class="%(copycls)s">Copy</button><button class="ghost" id="clear">Clear</button>
-</div></div>
-<script>%(js)s</script></body></html>""" % {
-        "LG": lg.upper(), "css": CSS, "built": built.strftime("%a %b %d, %I:%M %p").replace(" 0", " "),
-        "chips": "".join('<span class="chip">%s</span>' % c for c in chips),
-        "notes": notes(board, cfg), "entries": entries_html(board),
-        "pickem": pickem_table(board, nfl), "fliff": fliff_table(board, nfl), "kalshi": kalshi_table(board, nfl),
-        "be": E(" · ".join(be_lines)), "cush": "%g pt" % round(th["pickem_cushion"] * 100, 2),
-        "fev": pct(th["fliff_min_ev"], 0), "kev": pct(th["kalshi_min_ev"], 0),
-        "kc": cfg["kalshi"]["contracts"], "kmin": cfg["kalshi"].get("min_size", 0), "minb": 1 if th.get("one_book_ok") else th["min_sharp_books"],
-        "js": js, "nav": nav_html(lg, web) if web else "",
-        "logbtn": '<a id="log" class="btn" target="_blank" rel="noopener">Log bet on GitHub</a>' if web else "",
-        "copycls": "ghost" if web else "",
-        "clvref": '<a href="bets.html">Bets &amp; CLV</a>' if web else "<code>python3 edgefinder.py clv</code>",
+    data = payload(board, cfg, root, web)
+    primary = ('<a id="log" class="btn" target="_blank" rel="noopener">Log bet on GitHub</a>' if web
+               else "")
+    body = BODY % {
+        "nav": nav_html(board["league"], web) if web else "",
+        "primary": primary,
+        "data": json.dumps(data, separators=(",", ":")).replace("</", "<\\/"),
+        "js": JS,
     }
-    return page
-
-
-def nav_html(active, web):
-    links = [("index", "Home"), ("nba", "NBA"), ("nfl", "NFL"), ("bets", "Bets & CLV")]
-    return '<nav class="top">%s</nav>' % "".join(
-        '<a href="%s.html"%s>%s</a>' % (k, ' class="on"' if k == active else "", E(t)) for k, t in links)
+    return head("Edge Finder " + board["league"].upper(), web=bool(web)) + body
 
 
 def write(board, cfg, root, boards_dir):
@@ -431,11 +514,12 @@ def write(board, cfg, root, boards_dir):
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["code", "section", "flagged", "book", "player", "game", "start", "market", "side", "line",
-                    "fair_p", "breakeven", "edge", "price_or_ask", "ev", "n_sharp", "adj_gap", "ge_p", "ge_tag", "sharp"])
+                    "fair_p", "fair_p_raw", "breakeven", "edge", "price_or_ask", "ev", "n_sharp", "adj_gap", "ge_p",
+                    "ge_tag", "sharp"])
         for sec in ("pickem", "fliff", "kalshi"):
             for x in board[sec]:
                 w.writerow([x["code"], sec, int(x["flagged"]), x["book"], x["player"], x["game"], x["commence"],
-                            x["market"], x["side"], x["point"], round(x["p"], 4),
+                            x["market"], x["side"], x["point"], round(x["p"], 4), round(x["p_raw"], 4),
                             round(x["breakeven"], 4) if x.get("breakeven") else "",
                             round(x["edge"], 4) if x.get("edge") is not None else "",
                             x["ask"] if sec == "kalshi" else (x["price"] or ""),

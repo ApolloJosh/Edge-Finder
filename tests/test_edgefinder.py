@@ -253,7 +253,7 @@ class Pipeline(unittest.TestCase):
         with open(path) as f:
             page = f.read()
         self.assertIn("Alpha One", page)
-        self.assertIn('data-code="%s"' % ud["code"], page)
+        self.assertIn('"c":"%s"' % ud["code"], page)
         self.assertIn("UD Standard 3", page)
         self.assertTrue(os.path.exists(csv_path))
 

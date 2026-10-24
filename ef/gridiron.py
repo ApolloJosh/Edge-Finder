@@ -22,7 +22,7 @@ def find_export():
     pats = [os.path.join(INPUTS_DIR, "gridiron-edge-*.json"),
             os.path.expanduser("~/Downloads/gridiron-edge-*.json")]
     files = [f for p in pats for f in glob.glob(p)]
-    return max(files, key=os.path.getmtime) if files else None
+    return max(files, key=lambda f: (os.path.getmtime(f), os.path.basename(f))) if files else None
 
 
 def _is_biased(cfg, ge_market, pos):

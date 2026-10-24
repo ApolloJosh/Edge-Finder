@@ -5,6 +5,8 @@
 #    command issues, and republish the board if anything changed.
 #  * When you open an issue (the board's Log button does this): the same
 #    pass runs right away, so the bet is logged within a couple of minutes.
+#  * When you upload a Gridiron Edge export into inputs/ on GitHub: load it
+#    and rebuild the board.
 #  * Actions tab > Edge Finder > Run workflow: run a task by hand.
 #
 # The SQLite database lives on the `state` branch as a single commit that is
@@ -25,6 +27,9 @@ on:
         options: [auto, refresh-nba, refresh-nfl, gridiron-edge, probe, site-only]
   issues:
     types: [opened]
+  push:
+    branches: [main]
+    paths: ["inputs/**"]
 
 permissions:
   contents: write
@@ -52,6 +57,8 @@ jobs:
       TASK: ${{ inputs.task || 'auto' }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
 
       - uses: actions/setup-python@v7
         with:
@@ -67,7 +74,14 @@ jobs:
             echo "No state branch yet - starting fresh"
           fi
 
-      # ---------- Gridiron Edge (NFL game days only) ----------
+      # ---------- Gridiron Edge ----------
+      - name: Load an uploaded Gridiron Edge export
+        id: upload
+        if: github.event_name == 'push'
+        run: |
+          f=$(git diff --name-only --diff-filter=AM HEAD~1 HEAD -- inputs/ | grep -i '\.json$' | tail -1)
+          if [ -n "$f" ]; then python edgefinder.py ge-import "$f" && echo "loaded=true" >> "$GITHUB_OUTPUT"; else echo "No export in this push"; fi
+
       - name: Is a Gridiron Edge export due?
         id: ge
         if: github.event_name != 'issues'
@@ -133,7 +147,8 @@ jobs:
         id: site
         if: >-
           steps.issues.outputs.changed == 'true' || steps.main.outputs.changed == 'true' ||
-          steps.manual.outputs.changed == 'true' || steps.geexport.outcome == 'success'
+          steps.manual.outputs.changed == 'true' || steps.geexport.outcome == 'success' ||
+          steps.upload.outputs.loaded == 'true'
         run: |
           python edgefinder.py site --out site --status "Last change: $(TZ=America/Chicago date '+%a %b %-d, %-I:%M %p') Central"
           echo "built=true" >> "$GITHUB_OUTPUT"
