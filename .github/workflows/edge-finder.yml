@@ -41,7 +41,7 @@ jobs:
   run:
     # Issues from anyone but the repo owner never start a run.
     if: github.event_name != 'issues' || github.event.issue.user.login == github.repository_owner
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       site: ${{ steps.site.outputs.built }}
@@ -51,9 +51,9 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       TASK: ${{ inputs.task || 'auto' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -76,7 +76,7 @@ jobs:
 
       - name: Check out Gridiron Edge
         if: steps.ge.outputs.ge_due == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ApolloJosh/Gridiron-Edge
           path: gridiron-edge
@@ -140,17 +140,17 @@ jobs:
 
       - name: Package the site
         if: steps.site.outputs.built == 'true'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
   deploy:
     needs: run
     if: needs.run.outputs.site == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

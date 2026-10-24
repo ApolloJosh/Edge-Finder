@@ -99,6 +99,13 @@ def gh_output(**kv):
                 f.write("%s=%s\n" % (k, v))
 
 
+def notice(msg):
+    """Print, and on GitHub Actions also show it on the run's summary page."""
+    print(msg)
+    if os.environ.get("GITHUB_ACTIONS"):
+        print("::notice::" + msg.replace("%", "%25").replace("\r", "").replace("\n", "%0A"))
+
+
 def has_key():
     load_env()
     k = os.environ.get("ODDS_API_KEY", "").strip()
@@ -108,13 +115,13 @@ def has_key():
 def cmd_auto(cfg, con, args):
     changed = False
     if not has_key():
-        print("No ODDS_API_KEY secret yet - add it in the repo's Settings > Secrets and variables > Actions.")
+        notice("No ODDS_API_KEY secret yet - add it in the repo's Settings > Secrets and variables > Actions.")
     else:
         key = odds_api_key()
         for lg in (args.league and [args.league]) or cfg["auto"]["leagues"]:
             r = automod.run_league(con, cfg, lg, key, aliases=load_aliases())
             changed = changed or r["board_pull"] or r["close_pulls"] > 0 or r.get("closed_legs", 0) > 0
-            print("%s: %d games ahead, board pull %s, %d closing snapshot(s), %d credits%s" % (
+            notice("%s: %d games ahead, board pull %s, %d closing snapshot(s), %d credits%s" % (
                 lg.upper(), r.get("games_ahead", 0), "yes" if r["board_pull"] else "no", r["close_pulls"],
                 r["credits"], (" (" + r["skipped"] + ")") if r["skipped"] else ""))
     automod.prune(con)
@@ -165,7 +172,7 @@ def cmd_sweep_issues(cfg, con, args):
         _gh("issue", "comment", str(it["number"]), "--repo", repo, "--body-file", "-",
             stdin=web.comment_for(cmd, ok, text))
         _gh("issue", "close", str(it["number"]), "--repo", repo)
-        print("#%d %s: %s" % (it["number"], " ".join(cmd), "ok" if ok else "failed"))
+        notice("Issue #%d %s: %s" % (it["number"], " ".join(cmd), "ok" if ok else "failed - " + text[-300:]))
         done += 1
     gh_output(changed="true" if done else "false", swept=str(done))
 
@@ -190,6 +197,8 @@ def cmd_ge_due(cfg, con, args):
             con.execute("INSERT INTO auto_slots (slot, ts) VALUES (?,?)", (slot, iso(now)))
             con.commit()
     print("Gridiron Edge export due: %s" % due)
+    if due:
+        notice("Gridiron Edge export due - running it")
     gh_output(ge_due="true" if due else "false")
 
 
@@ -199,15 +208,21 @@ def cmd_probe(cfg, con, args):
     for series in ("KXNBAPTS", "KXNFLRECYDS"):
         st, _, data = get_json(base + "/markets?series_ticker=%s&status=open&limit=1000" % series, http_get)
         n = len((data or {}).get("markets") or []) if st == 200 else 0
-        print("Kalshi %s: HTTP %s, %d open markets" % (series, st, n))
+        notice("Kalshi %s: HTTP %s, %d open markets" % (series, st, n))
     st, _, data = get_json("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard", http_get)
-    print("ESPN NBA scoreboard: HTTP %s, %d games" % (st, len((data or {}).get("events") or [])))
+    notice("ESPN NBA scoreboard: HTTP %s, %d games" % (st, len((data or {}).get("events") or [])))
     if has_key():
         api = OddsAPI(cfg, odds_api_key())
         st, data = api.sports()
-        print("Odds API: HTTP %s, %s credits left" % (st, api.remaining))
+        notice("Odds API: HTTP %s, %s credits left" % (st, api.remaining))
+        lg = cfg.league("nba")
+        from datetime import timedelta
+        from ef.util import utcnow
+        now = utcnow()
+        st, evs = api.events(lg["sport_key"], now, now + timedelta(hours=14))
+        notice("Odds API NBA games in the next 14 hours: %s (HTTP %s, free call)" % (len(evs or []), st))
     else:
-        print("Odds API: no key yet")
+        notice("Odds API: no key yet")
 
 
 def main(argv=None):
@@ -282,7 +297,7 @@ def main(argv=None):
             sys.exit("No Gridiron Edge export found in inputs/ or Downloads. In Gridiron Edge, click "
                      "'Export for Edge Finder' first.")
         info = gridiron.import_export(con, cfg, path, aliases=load_aliases())
-        print("Loaded Gridiron Edge %s week %s: %d player-markets (scan saved %s) from %s"
+        notice("Loaded Gridiron Edge %s week %s: %d player-markets (scan saved %s) from %s"
               % (info["year"], info["week"], info["rows"], info["saved_at"], os.path.basename(path)))
     elif args.cmd == "bet":
         ids = betlog.log_bet(con, cfg, args.league, args.codes, entry=args.entry, stake=args.stake,
