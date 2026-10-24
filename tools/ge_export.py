@@ -11,12 +11,33 @@ On failure it reports what the page was doing (errors, failed requests, the
 text on screen) as a GitHub annotation, since Actions logs aren't always handy.
 """
 import os
+import re
 import sys
 import time
+import urllib.error
+import urllib.request
 
 from playwright.sync_api import sync_playwright
 
 BUTTON = "button:has-text('Export for Edge Finder')"
+UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+      "Chrome/130.0.0.0 Safari/537.36")
+ESPN = re.compile(r"^https?://[^/]*espn\.com/")
+
+
+def via_python(route, request):
+    """ESPN turns away headless Chrome (403) but answers a plain request, so
+    Gridiron Edge's ESPN calls are made here and handed back to the page."""
+    try:
+        req = urllib.request.Request(request.url, headers={"User-Agent": UA, "Accept": "application/json,*/*"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            status, body, ctype = r.status, r.read(), r.headers.get("Content-Type", "application/json")
+    except urllib.error.HTTPError as e:
+        status, body, ctype = e.code, e.read() or b"", e.headers.get("Content-Type", "text/plain")
+    except Exception:
+        route.abort()
+        return
+    route.fulfill(status=status, body=body, headers={"Content-Type": ctype, "Access-Control-Allow-Origin": "*"})
 
 
 def report(title, lines):
@@ -36,7 +57,8 @@ def main(index_html, out_dir, timeout_s=300):
         # same public data Gridiron Edge reads in your browser, so the browser's
         # cross-site check is switched off for it.
         browser = p.chromium.launch(args=["--disable-web-security"])
-        page = browser.new_page(accept_downloads=True, viewport={"width": 1400, "height": 900})
+        page = browser.new_page(accept_downloads=True, viewport={"width": 1400, "height": 900}, user_agent=UA)
+        page.route(ESPN, via_python)
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.on("console", lambda m: console.append("%s: %s" % (m.type, m.text)) if m.type in ("error", "warning") else None)
         page.on("requestfailed", lambda r: failed.append("%s (%s)" % (r.url.split("?")[0], r.failure)))
