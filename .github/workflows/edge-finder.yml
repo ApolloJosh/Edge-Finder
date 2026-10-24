@@ -128,6 +128,18 @@ jobs:
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
       # ---------- save + publish ----------
+      - name: Build the site
+        id: site
+        if: >-
+          steps.issues.outputs.changed == 'true' || steps.main.outputs.changed == 'true' ||
+          steps.manual.outputs.changed == 'true' || steps.geexport.outcome == 'success' ||
+          steps.upload.outputs.loaded == 'true'
+        run: |
+          python edgefinder.py site --out site --status "Last change: $(TZ=America/Chicago date '+%a %b %-d, %-I:%M %p') Central"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      # After the site build: building the board writes the pick numbers it shows,
+      # and a bet logged from that page is looked up by those numbers.
       - name: Save database to the state branch
         if: always()
         run: |
@@ -142,16 +154,6 @@ jobs:
           git commit -q -m "state $(date -u +%Y-%m-%dT%H:%MZ)"
           git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" state
           echo "Saved $(du -h edgefinder.db | cut -f1) database"
-
-      - name: Build the site
-        id: site
-        if: >-
-          steps.issues.outputs.changed == 'true' || steps.main.outputs.changed == 'true' ||
-          steps.manual.outputs.changed == 'true' || steps.geexport.outcome == 'success' ||
-          steps.upload.outputs.loaded == 'true'
-        run: |
-          python edgefinder.py site --out site --status "Last change: $(TZ=America/Chicago date '+%a %b %-d, %-I:%M %p') Central"
-          echo "built=true" >> "$GITHUB_OUTPUT"
 
       - name: Package the site
         if: steps.site.outputs.built == 'true'

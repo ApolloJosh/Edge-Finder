@@ -203,3 +203,13 @@ class Site(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Workflow(unittest.TestCase):
+    def test_database_saved_after_site_build(self):
+        """The board page writes the pick numbers bets are logged by, so the
+        database must be saved after the site is built - not before."""
+        with open(os.path.join(os.path.dirname(HERE), ".github", "workflows", "edge-finder.yml")) as f:
+            wf = f.read()
+        self.assertLess(wf.index("- name: Build the site"), wf.index("- name: Save database to the state branch"))
+        self.assertLess(wf.index("- name: Save database to the state branch"), wf.index("- name: Package the site"))
