@@ -99,6 +99,7 @@
 
   "thresholds": {
     "pickem_cushion": 0.01,
+    "adj_haircut_per_sd": 0.03,
     "fliff_min_ev": 0.03,
     "kalshi_min_ev": 0.03,
     "min_sharp_books": 2,
@@ -123,7 +124,8 @@
 
   "kalshi": {
     "base": "https://api.elections.kalshi.com/trade-api/v2",
-    "contracts": 10
+    "contracts": 10,
+    "min_size": 5
   },
 
   "gridiron_edge": {

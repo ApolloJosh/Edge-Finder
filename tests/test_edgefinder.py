@@ -295,6 +295,29 @@ class Pipeline(unittest.TestCase):
             pull_odds(self.con, cfg, "nba", "KEY", fetch=FakeAPI(ev, od, ka), log=self.quiet,
                       ask=lambda _: "n")
 
+    def test_adjusted_lines_and_thin_kalshi(self):
+        """A price moved to a different line takes a cut before flagging, but bets
+        store the market's own number so CLV compares like with like. Kalshi
+        needs real size to flag."""
+        pid, _, _ = self._pull()
+        b = boardmod.build(self.con, CFG, "nba", pull_id=pid)
+        rows = b["pickem"] + b["fliff"] + b["kalshi"]
+        for x in rows:
+            if x["exact"]:
+                self.assertEqual(x["p"], x["p_raw"])
+            else:
+                self.assertLess(x["p"], x["p_raw"])
+        boardmod.save_codes(self.con, b)
+        ud = [x for x in b["pickem"] if x["book"] == "underdog" and x["player_key"] == "alpha one" and x["side"] == "over"][0]
+        stored = self.con.execute("SELECT fair_p FROM board_picks WHERE code=?", (ud["code"],)).fetchone()["fair_p"]
+        self.assertAlmostEqual(stored, ud["p_raw"])
+        cfg = load_config()
+        cfg["kalshi"]["min_size"] = 1000           # fixture offers 120
+        b2 = boardmod.build(self.con, cfg, "nba", pull_id=pid)
+        k = [x for x in b2["kalshi"] if x["point"] == 23.5 and x["side"] == "over"][0]
+        self.assertGreater(k["roi"], CFG["thresholds"]["kalshi_min_ev"])
+        self.assertFalse(k["flagged"])
+
     def test_codes_follow_their_board(self):
         """A command copied from an older board must log that board's picks,
         even after a lineup-time rerun renumbers everything."""

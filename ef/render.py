@@ -384,7 +384,8 @@ def render(board, cfg, root, web=None):
 
 <div class="foot">Fair = the sharp books' consensus chance after removing their margin, using whichever of two
 de-vig methods is less generous to your side. "adj" means a sharp line sat a little off this one and its price was moved
-to this line using the stat's typical spread. Rows need %(minb)s sharp book(s). Judge results by closing line value
+to this line using the stat's typical spread; those rows take a further cut before they can be flagged, bigger the further
+the move. Kalshi rows need at least %(kmin)s contracts on offer. Rows need %(minb)s sharp book(s). Judge results by closing line value
 (%(clvref)s), not early wins and losses.</div>
 </div>
 <div class="dock" id="dock"><div class="row">
@@ -401,7 +402,7 @@ to this line using the stat's typical spread. Rows need %(minb)s sharp book(s). 
         "pickem": pickem_table(board, nfl), "fliff": fliff_table(board, nfl), "kalshi": kalshi_table(board, nfl),
         "be": E(" · ".join(be_lines)), "cush": "%g pt" % round(th["pickem_cushion"] * 100, 2),
         "fev": pct(th["fliff_min_ev"], 0), "kev": pct(th["kalshi_min_ev"], 0),
-        "kc": cfg["kalshi"]["contracts"], "minb": 1 if th.get("one_book_ok") else th["min_sharp_books"],
+        "kc": cfg["kalshi"]["contracts"], "kmin": cfg["kalshi"].get("min_size", 0), "minb": 1 if th.get("one_book_ok") else th["min_sharp_books"],
         "js": js, "nav": nav_html(lg, web) if web else "",
         "logbtn": '<a id="log" class="btn" target="_blank" rel="noopener">Log bet on GitHub</a>' if web else "",
         "copycls": "ghost" if web else "",

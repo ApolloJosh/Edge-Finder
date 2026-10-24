@@ -3,7 +3,7 @@ against the sharp consensus."""
 from collections import defaultdict
 
 from . import gridiron
-from .fair import breakeven, consensus, entry_return, kalshi_fee
+from .fair import breakeven, consensus, entry_return, kalshi_fee, stat_sigma
 from .util import fmt_american, iso, local, parse_iso, short_team, utcnow
 
 MARKET_LABELS = {
@@ -143,7 +143,12 @@ def build(con, cfg, league, pull_id=None, now=None):
         c = consensus(qs, point, market, weights, cfg.max_gap(market))
         if not c or c["n"] < min_books:
             return None
-        c["p"] = c[side]
+        # p_raw is the market's fair number (stored with bets, so CLV compares like with like).
+        # p is what flags use: when a sharp price had to be moved to this line, take a cut
+        # proportional to how far it moved, because the move is a model, not a market.
+        c["p_raw"] = c[side]
+        cut = 0.0 if c["exact"] else th.get("adj_haircut_per_sd", 0.0) * c["max_gap"] / stat_sigma(market, point)
+        c["p"] = c["p_raw"] - cut
         c["sharp"] = sharp_summary([q for q in qs if q["book"] in c["books"]])
         return c
 
@@ -180,7 +185,7 @@ def build(con, cfg, league, pull_id=None, now=None):
         base = {
             "event_id": ev_id, "game": _game_label(ev), "commence": ev["commence_time"] if ev else None,
             "book": book, "market": r["market"], "player": r["player"], "player_key": r["player_key"],
-            "side": side, "point": r["point"], "p": c["p"], "n_sharp": c["n"], "exact": c["exact"],
+            "side": side, "point": r["point"], "p": c["p"], "p_raw": c["p_raw"], "n_sharp": c["n"], "exact": c["exact"],
             "gap": c["max_gap"], "sharp": c["sharp"], "multiplier": r["multiplier"],
             "price": r["price"], "ask": r["ask"], "size": r["size"], "ref": r["ref"],
         }
@@ -206,8 +211,9 @@ def build(con, cfg, league, pull_id=None, now=None):
         elif book == "kalshi":
             fee = kalshi_fee(r["ask"], cfg["kalshi"]["contracts"])
             ev_c = c["p"] - r["ask"] - fee
-            base.update(fee=fee, ev=ev_c, roi=ev_c / (r["ask"] + fee),
-                        flagged=(ev_c / (r["ask"] + fee)) >= th["kalshi_min_ev"])
+            roi = ev_c / (r["ask"] + fee)
+            deep = (r["size"] or 0) >= cfg["kalshi"].get("min_size", 0)
+            base.update(fee=fee, ev=ev_c, roi=roi, flagged=roi >= th["kalshi_min_ev"] and deep)
             kalshi.append(with_ge(base, r["market"], r["point"], side))
 
     pickem.sort(key=lambda x: (-x["flagged"], -(x["edge"] or -1)))
@@ -275,7 +281,7 @@ def save_codes(con, board):
                 " ge_p, ge_score) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ts, board["league"], x["code"], board["pull"]["id"], x["event_id"], x["commence"],
                  x["book"], x["market"], x["player"], x["player_key"], x["side"], x["point"],
-                 x["price"], x["multiplier"], x["ask"], x["ref"], x["p"], x["n_sharp"],
+                 x["price"], x["multiplier"], x["ask"], x["ref"], x["p_raw"], x["n_sharp"],
                  x.get("ge_p"), x.get("ge_score")),
             )
     con.commit()
