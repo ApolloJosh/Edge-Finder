@@ -13,6 +13,8 @@ from urllib.parse import quote
 
 from . import auto as automod
 from . import board as boardmod
+from . import check as checkmod
+from . import checkpage
 from .bets import update_closes
 from . import render
 from .board import BOOK_LABELS, market_label
@@ -22,7 +24,7 @@ from .util import local, parse_iso, utcnow
 E = html.escape
 
 # Commands an issue may run. Anything else is refused.
-ALLOWED = {"bet", "result", "edit", "delete", "restore", "run", "refresh", "ge-import"}
+ALLOWED = {"bet", "bet-line", "result", "edit", "delete", "restore", "run", "refresh", "ge-import"}
 
 
 def parse_issue(title, body):
@@ -116,7 +118,7 @@ el.textContent=m<1?'just now':m<60?m+' min ago':Math.floor(m/60)+'h '+(m%60)+'m 
 
 
 def _page(title, active, content, web, js=""):
-    return (render.head(title, web=True).replace("</style>", EXTRA_CSS + HOME_CSS + RESULTS_CSS + "</style>") +
+    return (render.head(title, web=True).replace("</style>", EXTRA_CSS + HOME_CSS + RESULTS_CSS + checkpage.CSS + "</style>") +
             '<body><header class="bar"><div class="wrap">%s</div></header><main class="wrap">%s</main>%s%s%s</body></html>' % (
                 render.nav_html(active, web), content, render.ef_script(web["repo"]), AGO_JS, js))
 
@@ -313,6 +315,14 @@ def build_site(con, cfg, out_dir, now=None, status_line=None):
         with open(os.path.join(out_dir, "%s.html" % lg), "w") as f:
             f.write(page)
 
+    # Check page: the sharp prices for every player, fetched by the page when it opens.
+    for lg in ("nba", "nfl"):
+        with open(os.path.join(out_dir, "%s-check.json" % lg), "w") as f:
+            json.dump(checkmod.payload(con, cfg, lg, now), f, separators=(",", ":"))
+    with open(os.path.join(out_dir, "check.html"), "w") as f:
+        f.write(_page("Check a price", "check", checkpage.CONTENT, web,
+                      "<script>window.CK_GEN = %s;</script>%s" % (json.dumps(iso_now(now)), checkpage.JS)))
+
     data = results_payload(con, cfg, repo, now)
     with open(os.path.join(out_dir, "bets.html"), "w") as f:
         f.write(bets_page(data, web))
@@ -340,6 +350,7 @@ def build_site(con, cfg, out_dir, now=None, status_line=None):
 <li>For games you bet, it saves the closing line just before the start (about 1 credit a game) and grades results from ESPN box scores after.</li>
 <li><a href="bets.html">Results</a> shows your record, profit, closing line value, how close your misses were, and what's working by app, stat and entry.</li>
 <li>Run NFL also runs Gridiron Edge first and shows its read on each pick.</li>
+<li><a href="check.html">Check</a> prices a line from Robinhood or any app without a feed: set the line and its price, get Take it or Skip it.</li>
 <li>Add to your Home Screen: Share → <b>Add to Home Screen</b>. It opens full screen like an app.</li>
 </ol></details>
 <div class="foot">%(status)s</div>""" % {
@@ -403,7 +414,7 @@ def payout_if_hit(cfg, b, legs):
     if b["book"] in cfg.pickem_books:
         e = cfg.entries(b["book"]).get(b["entry_type"] or "")
         return None if not e else round((b["stake"] or 0) * float(e["pays"].get(str(len(legs)), 0)), 2)
-    if b["book"] == "kalshi":
+    if b["book"] in ("kalshi", "robinhood"):
         return round(b["contracts"] or 0, 2)
     return round((b["stake"] or 0) * (legs[0]["price"] or 0), 2)
 
@@ -416,6 +427,8 @@ def results_payload(con, cfg, repo, now):
             entry = (cfg.entries(b["book"]).get(b["entry_type"] or "") or {}).get("label") or b["entry_type"]
         elif b["book"] == "kalshi":
             entry = "Kalshi · %s shares" % ("%g" % round(b["contracts"] or 0, 2))
+        elif b["book"] == "robinhood":
+            entry = "Robinhood · %s contracts" % ("%g" % round(b["contracts"] or 0, 2))
         else:
             entry = "%s · straight" % BOOK_LABELS.get(b["book"], b["book"])
         starts = [l["commence_time"] for l in legs if l["commence_time"]]
@@ -826,17 +839,17 @@ document.addEventListener('click', async e => {
   if (ed) {
     const b = D.bets.find(x => x.id === +ed.dataset.edit);
     if (!b) return;
-    const k = b.book === 'kalshi';
+    const k = b.book === 'kalshi' || b.book === 'robinhood', unit = b.book === 'kalshi' ? 'Shares' : 'Contracts';
     const what = `<p><b>${esc(b.entry)}</b> · placed ${esc(when(b.placed))}<br>${b.legs.map(l => esc(`${l.pl} ${l.side === 'over' ? 'Over' : 'Under'} ${l.pt} ${l.m}`)).join('<br>')}</p>`;
     const body = what + (k
       ? `<label class="fld">Spent ($) <input id="ed-s" type="number" inputmode="decimal" min="0.01" step="0.01" value="${b.stake.toFixed(2)}"></label>
-<label class="fld">Shares <input id="ed-c" type="number" inputmode="decimal" min="0.01" step="0.01" value="${b.ct || ''}"></label>
-<p id="ed-sum"></p><p>Copy both from Kalshi's order history (for example "$2.00 · 4.18 shares").</p>`
+<label class="fld">${unit} <input id="ed-c" type="number" inputmode="decimal" min="0.01" step="0.01" value="${b.ct || ''}"></label>
+<p id="ed-sum"></p><p>${b.book === 'kalshi' ? 'Copy both from Kalshi\'s order history (for example "$2.00 · 4.18 shares").' : 'Copy both from Robinhood\'s order (contracts, and the cost including fees).'}</p>`
       : `<label class="fld">Stake ($) <input id="ed-s" type="number" inputmode="decimal" min="0.01" step="0.01" value="${b.stake.toFixed(2)}"></label>`);
     const pr = EF.confirm({title: `Edit bet #${b.id}`, body, ok: 'Save', cancel: 'Cancel'});
     const sum = () => {
       const s = parseFloat($('#ed-s').value), c = parseFloat($('#ed-c').value);
-      $('#ed-sum').innerHTML = s > 0 && c > 0 && s / c < 1 ? `${(100 * s / c).toFixed(1)}¢ a share with fee · pays <b>$${c.toFixed(2)}</b> if it hits`
+      $('#ed-sum').innerHTML = s > 0 && c > 0 && s / c < 1 ? `${(100 * s / c).toFixed(1)}¢ each with fees · pays <b>$${c.toFixed(2)}</b> if it hits`
         : 'Enter what you spent and the shares you got';
     };
     if (k) { sum(); $('#ed-c').oninput = sum; $('#ed-s').oninput = sum; }
@@ -845,7 +858,7 @@ document.addEventListener('click', async e => {
     if (k) {
       stake = Math.round(parseFloat($('#ed-s').value) * 100) / 100;
       const c = Math.round(parseFloat($('#ed-c').value) * 100) / 100;
-      if (!(stake > 0 && c > 0 && stake / c < 1)) { EF.toast('Enter what you spent and the shares you got (under $1 a share).', true); return; }
+      if (!(stake > 0 && c > 0 && stake / c < 1)) { EF.toast('Enter what you spent and how many you got (under $1 each).', true); return; }
       args = `edit ${b.id} --stake ${stake.toFixed(2)} --contracts ${c.toFixed(2)}`;
     } else {
       stake = Math.round(parseFloat($('#ed-s').value) * 100) / 100;

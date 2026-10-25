@@ -457,3 +457,63 @@ class KalshiStake(unittest.TestCase):
         self.assertEqual(web.parse_commands("result 7 win", ""), [["result", "7", "win"]])
         app = "```\nbet nba 4 --stake 2 --board 2026-10-25T10:00:00Z\n```\nSaved from the Edge Finder app."
         self.assertEqual(len(web.parse_commands("bet nba #4 $2", app)), 1)
+
+
+class PriceCheck(unittest.TestCase):
+    def setUp(self):
+        self.con = connect(os.path.join(tempfile.mkdtemp(), "c.db"))
+        self.t0 = utcnow() + timedelta(hours=3)
+        ev, od, ka = nba_fixture(self.t0)
+        automod.run_league(self.con, ACFG, "nba", "K", now=self.t0 - timedelta(minutes=55), fetch=FakeAPI(ev, od, ka),
+                           log=lambda *a: None)
+
+    def test_payload_reproduces_the_board_math(self):
+        """The page moves each sharp book's implied mean to the typed line. Redo that
+        here from the payload and it must equal fair.consensus for any line."""
+        from ef import check
+        from ef.board import merged_rows, sharp_quotes
+        from ef.fair import consensus, cond_over
+        now = self.t0 - timedelta(minutes=50)
+        d = check.payload(self.con, CFG, "nba", now)
+        self.assertTrue(d["items"])
+        qs = sharp_quotes(merged_rows(self.con, "nba", now), CFG.sharp_weights)
+        for it in d["items"]:
+            ref = qs[(it["ev"], it["k"], it["m"])]
+            for target in [q[1] + dx for q in it["q"] for dx in (-1, 0, 1, 2)]:
+                want = consensus(ref, target, it["m"], CFG.sharp_weights, CFG.max_gap(it["m"]), d["shift"])
+                nm = np_ = den = 0.0
+                for bi, pt, m0, p0, sig, mum, mup in it["q"]:
+                    gap = abs(pt - target)
+                    if gap > d["gap"][it["m"]] + 1e-9:
+                        continue
+                    m = m0 if gap < 1e-9 else cond_over(mum, sig, target)
+                    p = p0 if gap < 1e-9 else cond_over(mup, sig, target)
+                    if max(abs(m - m0), abs(p - p0)) > d["shift"] + 1e-9:
+                        continue
+                    w = d["w"][bi]
+                    nm, np_, den = nm + w * m, np_ + w * p, den + w
+                if want is None:
+                    self.assertEqual(den, 0, (it["pl"], target))
+                else:
+                    self.assertAlmostEqual(min(nm, np_) / den, want["over"], places=3)
+
+    def test_bet_line_logs_and_settles(self):
+        from ef.check import log_line_bet
+        bid, fair = log_line_bet(self.con, CFG, "nba", "ev1", "alpha one", "player_points", "over", 23.5,
+                                 stake=1.96, contracts=3, notes="issue #30", now=self.t0 - timedelta(minutes=40))
+        self.assertGreater(fair, 0.5)
+        b = self.con.execute("SELECT * FROM bets WHERE id=?", (bid,)).fetchone()
+        self.assertEqual((b["book"], b["stake"], b["contracts"]), ("robinhood", 1.96, 3))
+        leg = self.con.execute("SELECT * FROM bet_legs WHERE bet_id=?", (bid,)).fetchone()
+        self.assertAlmostEqual(leg["price"], 1.96 / 3)
+        self.assertEqual(leg["player"], "Alpha One")
+        betlog.set_result(self.con, CFG, bid, "win")
+        self.assertEqual(self.con.execute("SELECT payout FROM bets WHERE id=?", (bid,)).fetchone()["payout"], 3.0)
+        data = web.results_payload(self.con, CFG, "x/y", utcnow())
+        self.assertEqual(data["bets"][-1]["entry"], "Robinhood · 3 contracts")
+        self.assertIn("bet-line", web.ALLOWED)
+        cmd = web.parse_issue("x", '```\nbet-line nba --event ev1 --player "alpha one" --market player_points --side over '
+                                   '--point 23.5 --stake 1.96 --contracts 3\n```')
+        self.assertEqual(cmd[:6], ["bet-line", "nba", "--event", "ev1", "--player", "alpha one"])
+        with self.assertRaises(SystemExit):
+            log_line_bet(self.con, CFG, "nba", "ev1", "nobody", "player_points", "over", 23.5, stake=2, contracts=3)

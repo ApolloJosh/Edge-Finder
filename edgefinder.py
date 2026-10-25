@@ -145,7 +145,7 @@ def _gh(*args, stdin=None):
 def handle_command(cmd, number=None):
     """Run one issue command. (ok, text)."""
     argv = list(cmd)
-    if argv[0] == "bet" and number is not None and "--note" not in argv:
+    if argv[0] in ("bet", "bet-line") and number is not None and "--note" not in argv:
         argv += ["--note", "issue #%d" % number]   # lets the app see the bet has been recorded
     if argv[0] in ("run", "refresh"):
         lg = argv[1] if len(argv) > 1 else "nba"
@@ -271,6 +271,18 @@ def main(argv=None):
         sp.add_argument("league", choices=["nba", "nfl"])
         sp.add_argument("--minutes", type=int, default=15)
 
+    sp = sub.add_parser("bet-line", help="a bet on a line priced on the Check page (Robinhood)")
+    sp.add_argument("league", choices=["nba", "nfl"])
+    sp.add_argument("--event", required=True)
+    sp.add_argument("--player", required=True, help="player key, as the Check page has it")
+    sp.add_argument("--market", required=True)
+    sp.add_argument("--side", required=True, choices=["over", "under"])
+    sp.add_argument("--point", type=float, required=True)
+    sp.add_argument("--book", default="robinhood")
+    sp.add_argument("--stake", type=float, required=True, help="what it cost, fees included")
+    sp.add_argument("--contracts", type=float, required=True)
+    sp.add_argument("--note")
+
     for name in ("delete", "restore"):
         sp = sub.add_parser(name)
         sp.add_argument("bet_id", type=int)
@@ -341,6 +353,12 @@ def main(argv=None):
     elif args.cmd == "result":
         pay = betlog.set_result(con, cfg, args.bet_id, args.outcome, payout=args.payout, hits=args.hits)
         print("Bet #%d: %s, payout $%.2f" % (args.bet_id, args.outcome, pay))
+    elif args.cmd == "bet-line":
+        from ef.check import log_line_bet
+        bid, fair = log_line_bet(con, cfg, args.league, args.event, args.player, args.market, args.side, args.point,
+                                 book=args.book, stake=args.stake, contracts=args.contracts, notes=args.note)
+        print("Logged bet #%d (fair %s)." % (bid, "%.1f%%" % (100 * fair) if fair else "unknown"))
+        print(betlog.list_bets(con, limit=1))
     elif args.cmd == "delete":
         print(betlog.delete_bet(con, args.bet_id))
     elif args.cmd == "restore":

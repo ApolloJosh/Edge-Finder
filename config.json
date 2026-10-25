@@ -125,6 +125,12 @@
     "hours_ahead": 16
   },
 
+  "robinhood": {
+    "_note": "The Check page, for apps without a price feed. fee_per_contract: Robinhood's commission plus exchange fee (an Oct 2026 order: 3 contracts at 64c cost $1.96, about 1.3c each). min_ev: the return a price must beat before the call is Take it.",
+    "fee_per_contract": 0.015,
+    "min_ev": 0.03
+  },
+
   "github": {
     "repo": "ApolloJosh/Edge-Finder"
   },

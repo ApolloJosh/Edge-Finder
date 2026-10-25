@@ -33,7 +33,7 @@ BOOK_LABELS = {
     "prizepicks": "PrizePicks", "underdog": "Underdog", "fliff": "Fliff", "kalshi": "Kalshi",
     "pinnacle": "Pinnacle", "fanduel": "FanDuel", "draftkings": "DraftKings",
     "betonlineag": "BetOnline", "betmgm": "BetMGM", "espnbet": "theScore",
-    "williamhill_us": "Caesars", "sleeper": "Sleeper",
+    "williamhill_us": "Caesars", "sleeper": "Sleeper", "robinhood": "Robinhood",
 }
 BOOK_SHORT = {"pinnacle": "PIN", "fanduel": "FD", "draftkings": "DK", "betonlineag": "BOL",
               "betmgm": "MGM", "espnbet": "SCR", "williamhill_us": "CZR"}

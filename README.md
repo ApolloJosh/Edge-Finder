@@ -56,7 +56,13 @@ pruned after 3 days.
    scores once the game is final. A pick'em entry with a voided or pushed leg, or a player the box score
    doesn't list, is left for you: tap Win / Loss / Push on Results.
 4. Lineup news? Tap Run again (it costs credits again).
-5. Logged something wrong? Every bet on Results has **Edit** (the stake; for Kalshi, what you spent and the
+5. **Robinhood (or any app without a price feed):** open **Check**, find the player, pick the stat, set the
+   line Robinhood shows (60+ means Yes = 60 or more) and its price in cents. You get a plain **Take it** or
+   **Skip it**, with the most it's worth paying. Bought it? Tap **I bought it** and copy the contracts and
+   cost from Robinhood's order summary; it's tracked on Results like everything else. It prices yards,
+   receptions, attempts and the NBA stats from the last Run; touchdown markets aren't priced. Fees are
+   assumed at 1.5¢ a contract (`config.json` → `robinhood`), and Take it needs a 3% expected return.
+6. Logged something wrong? Every bet on Results has **Edit** (the stake; for Kalshi, what you spent and the
    shares you got, straight from Kalshi's order history) and **Delete bet**, which asks first and can be
    undone from **Deleted bets** at the bottom of Results.
 
@@ -79,7 +85,7 @@ It also shows **how close each leg came**, because a miss by one is a different 
 No key on a device? Save still works through GitHub: the bottom sheet has "or log it on GitHub instead".
 
 Only issues opened by the repo owner run anything, and only these commands:
-`bet`, `result`, `edit`, `delete`, `restore`, `run` (or `refresh`), `ge-import`. An issue can carry several
+`bet`, `bet-line`, `result`, `edit`, `delete`, `restore`, `run` (or `refresh`), `ge-import`. An issue can carry several
 command lines; they run in order. Other issues are left alone.
 
 The Actions tab → Edge Finder → **Run workflow** also offers: run-nba, run-nfl,

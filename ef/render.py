@@ -30,7 +30,7 @@ header.bar{position:sticky;top:0;z-index:20;background:var(--bg);padding:calc(8p
 border-bottom:1px solid var(--line)}
 nav.top{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;margin:0 -4px}
 nav.top::-webkit-scrollbar{display:none}
-nav.top a{flex:none;color:var(--dim);text-decoration:none;font-size:14px;font-weight:600;padding:8px 12px;border-radius:8px}
+nav.top a{flex:none;color:var(--dim);text-decoration:none;font-size:14px;font-weight:600;padding:8px 10px;border-radius:8px}
 nav.top a.on{background:var(--chip);color:var(--ink)}
 .controls{display:flex;gap:8px;align-items:center;margin-top:8px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
 .controls::-webkit-scrollbar{display:none}
@@ -141,7 +141,7 @@ def head(title, web=True):
 
 
 def nav_html(active, web):
-    links = [("index", "Home"), ("nba", "NBA"), ("nfl", "NFL"), ("bets", "Results")]
+    links = [("index", "Home"), ("nba", "NBA"), ("nfl", "NFL"), ("check", "Check"), ("bets", "Results")]
     return '<nav class="top">%s<a href="#settings" id="navset" class="gear" aria-label="Settings">Settings</a></nav>' % "".join(
         '<a href="%s.html"%s>%s</a>' % (k, ' class="on"' if k == active else "", E(t)) for k, t in links)
 

@@ -235,7 +235,7 @@ def edit_bet(con, cfg, bet_id, stake=None, contracts=None, price=None):
     if not b:
         raise SystemExit("No bet #%s." % bet_id)
     pay = b["payout"]
-    if b["book"] == "kalshi":
+    if b["book"] in ("kalshi", "robinhood"):
         shares = round(float(contracts if contracts is not None else (b["contracts"] or 0)), 2)
         if stake is not None:
             spent = round(float(stake), 2)
@@ -247,7 +247,7 @@ def edit_bet(con, cfg, bet_id, stake=None, contracts=None, price=None):
             raise SystemExit("Kalshi needs what you spent and the shares you got, both more than 0.")
         per = spent / shares
         if per >= 1:
-            raise SystemExit("That works out to %.0f cents a share - Kalshi shares cost under $1. Check the numbers." % (per * 100))
+            raise SystemExit("That works out to %.0f cents a contract - they cost under $1. Check the numbers." % (per * 100))
         if b["result"] == "win":
             pay = shares
         elif b["result"] == "push":
@@ -255,7 +255,8 @@ def edit_bet(con, cfg, bet_id, stake=None, contracts=None, price=None):
         con.execute("UPDATE bets SET contracts=?, stake=?, payout=? WHERE id=?", (shares, spent, pay, bet_id))
         con.execute("UPDATE bet_legs SET price=?, breakeven=? WHERE bet_id=?", (per, per, bet_id))
         con.commit()
-        return "Bet #%d: $%.2f for %.2f shares (%.1f cents each, fee included)." % (bet_id, spent, shares, per * 100)
+        return "Bet #%d: $%.2f for %g %s (%.1f cents each, fee included)." % (
+            bet_id, spent, shares, "shares" if b["book"] == "kalshi" else "contracts", per * 100)
     new = round(float(stake if stake is not None else b["stake"]), 2)
     if new <= 0:
         raise SystemExit("The stake has to be more than $0.")
@@ -296,6 +297,8 @@ def set_result(con, cfg, bet_id, result, payout=None, hits=None):
                 raise SystemExit("For a partial pick'em result, pass --hits N or --payout X.")
             payout = b["stake"] * float(e["pays"].get(str(k), 0))
         elif b["book"] == "kalshi":
+            payout = (b["contracts"] or 0) * 1.0 if result == "win" else 0.0
+        elif b["book"] == "robinhood":
             payout = (b["contracts"] or 0) * 1.0 if result == "win" else 0.0
         else:
             payout = b["stake"] * (legs[0]["price"] or 0) if result == "win" else 0.0
