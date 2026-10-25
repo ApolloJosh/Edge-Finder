@@ -1,11 +1,10 @@
-# Backup for GitHub's scheduler.
+# Starts the main Edge Finder run every 15 minutes.
 #
-# GitHub can take hours to start running a new repo's schedule, and it can
-# skip scheduled runs when it's busy. This starts the main Edge Finder run
-# every 15 minutes, and stops itself as soon as it sees GitHub's own
-# scheduled runs happening. Start it from Actions > Ticker > Run workflow.
-# It only starts runs; each run still decides what's due, so it costs no
-# extra Odds API credits.
+# GitHub's own schedule skips a lot of runs (Oct 24-25: 4 runs in 12 hours
+# instead of 48), so this keeps the cadence. Each job loops for ~5.5 hours and
+# then starts a fresh copy of itself; every main run also restarts it if it
+# has stopped. It only starts runs - each run still decides what's due - so it
+# costs no extra Odds API credits.
 
 name: Ticker
 
@@ -26,18 +25,11 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Start a run every 15 minutes until GitHub's schedule takes over
+      - name: Start a run every 15 minutes
         run: |
           end=$(( $(date +%s) + 330 * 60 ))
           while [ "$(date +%s)" -lt "$end" ]; do
-            since=$(date -u -d '-40 minutes' +%Y-%m-%dT%H:%M:%SZ)
-            n=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=schedule&created=>=$since" --jq .total_count)
-            if [ "$n" -gt 0 ]; then
-              echo "::notice::GitHub's own schedule is running now; the backup ticker is stopping."
-              exit 0
-            fi
             gh workflow run edge-finder.yml -R "$GITHUB_REPOSITORY" -f task=auto && echo "Started a run at $(date -u +%H:%MZ)"
             sleep 900
           done
-          # Still no schedule after ~5.5 hours: hand over to a fresh ticker.
           gh workflow run ticker.yml -R "$GITHUB_REPOSITORY"

@@ -17,7 +17,7 @@ name: Edge Finder
 
 on:
   schedule:
-    - cron: "7,22,37,52 0-6,15-23 * * *"
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       task:
@@ -32,6 +32,7 @@ on:
     paths: ["inputs/**"]
 
 permissions:
+  actions: write
   contents: write
   issues: write
   pages: write
@@ -84,7 +85,6 @@ jobs:
 
       - name: Is a Gridiron Edge export due?
         id: ge
-        if: github.event_name != 'issues'
         run: |
           if [ "$TASK" = "gridiron-edge" ]; then echo "ge_due=true" >> "$GITHUB_OUTPUT"; else python edgefinder.py ge-due; fi
 
@@ -104,6 +104,15 @@ jobs:
           python -m playwright install --with-deps chromium > pw-install.log 2>&1 || { echo "::error title=Gridiron Edge export::browser install failed: $(tail -c 600 pw-install.log | tr '\n' ' ')"; exit 1; }
           python tools/ge_export.py gridiron-edge/index.html inputs/
           python edgefinder.py ge-import
+
+      # GitHub skips many scheduled runs, so a backup ticker starts this
+      # workflow every 15 minutes. Every run makes sure the ticker is alive.
+      - name: Keep the backup ticker running
+        continue-on-error: true
+        run: |
+          n=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ticker.yml/runs?status=in_progress" --jq .total_count)
+          q=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ticker.yml/runs?status=queued" --jq .total_count)
+          if [ "$n" = "0" ] && [ "$q" = "0" ]; then gh workflow run ticker.yml -R "$GITHUB_REPOSITORY" && echo "::notice::Restarted the backup ticker"; fi
 
       # ---------- the work ----------
       - name: Commands from issues (bet / result / refresh)

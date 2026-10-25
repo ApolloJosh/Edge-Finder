@@ -140,7 +140,7 @@ def build(con, cfg, league, pull_id=None, now=None):
         qs = quotes.get((ev_id, pk, market))
         if not qs:
             return None
-        c = consensus(qs, point, market, weights, cfg.max_gap(market))
+        c = consensus(qs, point, market, weights, cfg.max_gap(market), th.get("max_shift", 0.08))
         if not c or c["n"] < min_books:
             return None
         # p_raw is the market's fair number (stored with bets, so CLV compares like with like).

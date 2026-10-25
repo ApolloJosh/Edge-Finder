@@ -122,7 +122,8 @@ def fair_at(con, cfg, league, leg, before_ts):
         qs = sharp_quotes(rows, cfg.sharp_weights).get((leg["event_id"], leg["player_key"], leg["market"]))
         if not qs:
             continue
-        c = consensus(qs, leg["point"], leg["market"], cfg.sharp_weights, cfg.max_gap(leg["market"]))
+        c = consensus(qs, leg["point"], leg["market"], cfg.sharp_weights, cfg.max_gap(leg["market"]),
+                      cfg["thresholds"].get("max_shift", 0.08))
         if c and c["n"] >= min_books:
             return c[leg["side"]], pr["ts"], c["n"]
     return None

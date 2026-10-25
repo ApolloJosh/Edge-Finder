@@ -100,6 +100,7 @@
   "thresholds": {
     "pickem_cushion": 0.01,
     "adj_haircut_per_sd": 0.03,
+    "max_shift": 0.08,
     "fliff_min_ev": 0.03,
     "kalshi_min_ev": 0.03,
     "min_sharp_books": 2,
@@ -114,7 +115,7 @@
     "min_lead_min": 5,
     "close_window_min": 30,
     "horizon_hours": 14,
-    "daily_credit_cap": 250,
+    "daily_credit_cap": 350,
     "credit_floor": 40
   },
 

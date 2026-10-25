@@ -71,13 +71,26 @@ STAT_MODELS = {
     "player_receptions": ("cv", 0.526),
 }
 
+# The narrowest spread a stat is allowed to have. Low lines (a backup tight
+# end's 7.5 receiving yards, a pocket passer's 1.5 rushing yards) come from
+# lumpy distributions - lots of zeros, the odd long play - and cv x line would
+# call them tightly bunched, which turns a few yards of line difference into a
+# huge, fake probability gap. First NFL board (Oct 25) flagged 172 such rungs.
+SIGMA_FLOOR = {
+    "player_pass_yds": 50, "player_pass_rush_yds": 50, "player_pass_attempts": 6,
+    "player_pass_completions": 4.5, "player_rush_yds": 15, "player_rush_attempts": 3,
+    "player_rush_reception_yds": 18, "player_reception_yds": 15, "player_receptions": 1.3,
+}
+
 
 def stat_sigma(market, line):
     kind, k = STAT_MODELS.get(market, ("sqrt", 1.2))
     line = max(float(line), 0.5)
     if kind == "cv":
-        return max(k * line, 1.0)
-    return max(k * math.sqrt(line), 0.5)
+        sigma = max(k * line, 1.0)
+    else:
+        sigma = max(k * math.sqrt(line), 0.5)
+    return max(sigma, SIGMA_FLOOR.get(market, 0.0))
 
 
 def _is_whole(x):
@@ -127,11 +140,15 @@ def shift_over(p_over, from_line, to_line, market):
 # ---------------------------------------------------------------- consensus
 
 
-def consensus(quotes, target_line, market, weights, max_gap):
+MAX_SHIFT = 0.08   # never move a sharp probability more than this to reach another line
+
+
+def consensus(quotes, target_line, market, weights, max_gap, max_shift=MAX_SHIFT):
     """Fair P(over target_line) from several sharp books.
 
     quotes: list of dicts {book, point, over, under} with decimal prices.
-    Books whose line is more than max_gap away are dropped rather than
+    Books whose line is more than max_gap away, or whose price would have to
+    move more than max_shift to reach this line, are dropped rather than
     stretched. Returns None when nothing usable remains, else a dict with the
     conservative over/under probabilities and what went into them.
     """
@@ -141,9 +158,11 @@ def consensus(quotes, target_line, market, weights, max_gap):
         gap = abs(q["point"] - target_line)
         if gap > max_gap + 1e-9:
             continue
-        m, p = devig_pair(q["over"], q["under"])
-        m = shift_over(m, q["point"], target_line, market)
-        p = shift_over(p, q["point"], target_line, market)
+        m0, p0 = devig_pair(q["over"], q["under"])
+        m = shift_over(m0, q["point"], target_line, market)
+        p = shift_over(p0, q["point"], target_line, market)
+        if max(abs(m - m0), abs(p - p0)) > max_shift + 1e-9:
+            continue
         w = weights.get(q["book"], 0.5)
         num_m += w * m
         num_p += w * p
