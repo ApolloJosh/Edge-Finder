@@ -42,6 +42,20 @@ def parse_issue(title, body):
     return None
 
 
+def parse_commands(title, body):
+    """Every command line in an issue body (the app sends one; a fix-up can carry several).
+    Falls back to the title."""
+    out = []
+    for line in (body or "").replace("\r", "").split("\n"):
+        c = parse_issue("", line)
+        if c:
+            out.append(c)
+    if out:
+        return out
+    c = parse_issue(title, "")
+    return [c] if c else []
+
+
 def run_cli(main, argv):
     """Run edgefinder.main(argv), capturing what it prints. (ok, text)."""
     buf = io.StringIO()
@@ -401,7 +415,7 @@ def results_payload(con, cfg, repo, now):
         if b["book"] in cfg.pickem_books:
             entry = (cfg.entries(b["book"]).get(b["entry_type"] or "") or {}).get("label") or b["entry_type"]
         elif b["book"] == "kalshi":
-            entry = "Kalshi · %d contracts" % int(b["contracts"] or 0)
+            entry = "Kalshi · %s shares" % ("%g" % round(b["contracts"] or 0, 2))
         else:
             entry = "%s · straight" % BOOK_LABELS.get(b["book"], b["book"])
         starts = [l["commence_time"] for l in legs if l["commence_time"]]
@@ -715,7 +729,7 @@ function render() {
     }
   }
   h += barGroup('What\'s working: by app', byBets(settled, b => b.bl), v => sgn(100 * v) + '%', 'return on money staked');
-  h += barGroup('By entry type', byBets(settled, b => b.book === 'kalshi' ? 'Kalshi contracts' : b.et === 'straight' ? b.bl + ' straight' : b.entry), v => sgn(100 * v) + '%');
+  h += barGroup('By entry type', byBets(settled, b => b.book === 'kalshi' ? 'Kalshi' : b.et === 'straight' ? b.bl + ' straight' : b.entry), v => sgn(100 * v) + '%');
   h += barGroup('Flagged picks vs your own', byBets(settled, b => b.legs.every(l => l.fl) ? 'Only flagged picks' : 'Includes your own picks'), v => sgn(100 * v) + '%', 'did sticking to the board pay?');
   h += barGroup('By stat', byLegs(graded, l => l.m), v => sgn(100 * v) + ' pts', 'hit rate minus what the market expected');
   const nflLegs = graded.filter(l => l.lg === 'nfl');
@@ -790,9 +804,7 @@ function betCard(b, savingResult) {
 const delBtn = b => editing.has(b.id) ? '<div class="cardfoot"><span class="badge saving">saving edit</span></div>'
   : `<div class="cardfoot"><button class="link del" data-edit="${b.id}">Edit</button><button class="link del" data-del="${b.id}">Delete bet</button></div>`;
 let editing = new Set();
-// Kalshi cost for n contracts at price p, fee included (same rule as the board and the log)
-const kFee = (p, n) => Math.ceil(+(0.07 * n * p * (1 - p) * 100).toFixed(6)) / 100;
-const kCost = (p, n) => Math.round((n * p + kFee(p, n)) * 100) / 100;
+
 
 document.addEventListener('click', async e => {
   const d = e.target.closest('[data-del]');
@@ -814,25 +826,27 @@ document.addEventListener('click', async e => {
   if (ed) {
     const b = D.bets.find(x => x.id === +ed.dataset.edit);
     if (!b) return;
-    const k = b.book === 'kalshi', l0 = b.legs[0];
+    const k = b.book === 'kalshi';
     const what = `<p><b>${esc(b.entry)}</b> · placed ${esc(when(b.placed))}<br>${b.legs.map(l => esc(`${l.pl} ${l.side === 'over' ? 'Over' : 'Under'} ${l.pt} ${l.m}`)).join('<br>')}</p>`;
     const body = what + (k
-      ? `<label class="fld">Contracts <input id="ed-c" type="number" inputmode="numeric" min="1" step="1" value="${b.ct || 1}"></label>
-<label class="fld">Price per contract (¢) <input id="ed-p" type="number" inputmode="numeric" min="1" max="99" step="1" value="${Math.round((l0.price || 0.5) * 100)}"></label>
-<p id="ed-sum"></p><p>Use the numbers from your Kalshi order. The cost includes Kalshi's fee.</p>`
+      ? `<label class="fld">Spent ($) <input id="ed-s" type="number" inputmode="decimal" min="0.01" step="0.01" value="${b.stake.toFixed(2)}"></label>
+<label class="fld">Shares <input id="ed-c" type="number" inputmode="decimal" min="0.01" step="0.01" value="${b.ct || ''}"></label>
+<p id="ed-sum"></p><p>Copy both from Kalshi's order history (for example "$2.00 · 4.18 shares").</p>`
       : `<label class="fld">Stake ($) <input id="ed-s" type="number" inputmode="decimal" min="0.01" step="0.01" value="${b.stake.toFixed(2)}"></label>`);
     const pr = EF.confirm({title: `Edit bet #${b.id}`, body, ok: 'Save', cancel: 'Cancel'});
     const sum = () => {
-      const c = parseInt($('#ed-c').value, 10), p = parseInt($('#ed-p').value, 10) / 100;
-      $('#ed-sum').innerHTML = c >= 1 && p > 0 && p < 1 ? `<b>$${kCost(p, c).toFixed(2)}</b> with fee · pays $${c.toFixed(2)} if it hits` : 'Enter contracts and a price from 1 to 99¢';
+      const s = parseFloat($('#ed-s').value), c = parseFloat($('#ed-c').value);
+      $('#ed-sum').innerHTML = s > 0 && c > 0 && s / c < 1 ? `${(100 * s / c).toFixed(1)}¢ a share with fee · pays <b>$${c.toFixed(2)}</b> if it hits`
+        : 'Enter what you spent and the shares you got';
     };
-    if (k) { sum(); $('#ed-c').oninput = sum; $('#ed-p').oninput = sum; }
+    if (k) { sum(); $('#ed-c').oninput = sum; $('#ed-s').oninput = sum; }
     if (!(await pr)) return;
     let args, stake;
     if (k) {
-      const c = parseInt($('#ed-c').value, 10), p = parseInt($('#ed-p').value, 10) / 100;
-      if (!(c >= 1 && p > 0 && p < 1)) { EF.toast('Contracts must be 1 or more and the price 1 to 99¢.', true); return; }
-      args = `edit ${b.id} --contracts ${c} --price ${p.toFixed(2)}`; stake = kCost(p, c);
+      stake = Math.round(parseFloat($('#ed-s').value) * 100) / 100;
+      const c = Math.round(parseFloat($('#ed-c').value) * 100) / 100;
+      if (!(stake > 0 && c > 0 && stake / c < 1)) { EF.toast('Enter what you spent and the shares you got (under $1 a share).', true); return; }
+      args = `edit ${b.id} --stake ${stake.toFixed(2)} --contracts ${c.toFixed(2)}`;
     } else {
       stake = Math.round(parseFloat($('#ed-s').value) * 100) / 100;
       if (!(stake > 0)) { EF.toast('The stake has to be more than $0.', true); return; }

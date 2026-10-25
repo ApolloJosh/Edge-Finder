@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import timedelta
 
 from .board import BOOK_LABELS, market_label, sharp_quotes
-from .fair import breakeven, consensus, kalshi_fee
+from .fair import breakeven, consensus, kalshi_shares
 from .util import iso, local, parse_iso, pct, utcnow
 
 
@@ -34,20 +34,6 @@ def resolve_codes(con, league, codes, board_ts=None):
             raise SystemExit("There's no pick #%s on the latest %s board." % (c, league.upper()))
         picks.append(r)
     return ts, picks
-
-
-def kalshi_cost(ask, n):
-    """What n Kalshi contracts at `ask` cost, taker fee included, in dollars."""
-    return round(n * ask + kalshi_fee(ask, n) * n, 2)
-
-
-def kalshi_contracts(stake, ask):
-    """The most whole contracts `stake` dollars buys, fee included (at least 1).
-    Kalshi only sells whole contracts, so $2 at 45 cents is 4 contracts for $1.87."""
-    n = max(1, int(stake / ask + 1e-9))
-    while n > 1 and kalshi_cost(ask, n) > stake + 1e-9:
-        n -= 1
-    return n
 
 
 def log_bet(con, cfg, league, codes, entry=None, stake=1.0, price=None, contracts=None, notes=None, now=None,
@@ -89,13 +75,18 @@ def log_bet(con, cfg, league, codes, entry=None, stake=1.0, price=None, contract
             raise SystemExit("--price only works when logging one pick at a time.")
         for p in picks:
             if p["book"] == "kalshi":
+                # Kalshi buys by the dollar: the stake is what you spend, fee included, and it
+                # fills fractional shares. --contracts is the shares Kalshi gave you, when known.
                 ask = price if price is not None else p["ask"]
-                n = contracts or kalshi_contracts(stake, ask)
-                fee = kalshi_fee(ask, n)
+                spent = round(stake, 2)
+                shares = round(float(contracts), 2) if contracts else kalshi_shares(spent, ask)
+                if shares <= 0:
+                    raise SystemExit("Shares have to be more than 0.")
+                per = spent / shares                     # what each share cost, fee included
                 cur = con.execute(
                     "INSERT INTO bets (placed_at, league, book, entry_type, stake, contracts, notes)"
-                    " VALUES (?,?,?,?,?,?,?)", (iso(now), league, "kalshi", "kalshi", kalshi_cost(ask, n), n, notes))
-                _insert_leg(con, cur.lastrowid, 1, p, price=ask, fair=p["fair_p"], be=ask + fee)
+                    " VALUES (?,?,?,?,?,?,?)", (iso(now), league, "kalshi", "kalshi", spent, shares, notes))
+                _insert_leg(con, cur.lastrowid, 1, p, price=per, fair=p["fair_p"], be=per)
             else:
                 dec = price if price is not None else p["price"]
                 cur = con.execute(
@@ -238,27 +229,33 @@ def delete_bet(con, bet_id, now=None):
 
 def edit_bet(con, cfg, bet_id, stake=None, contracts=None, price=None):
     """Correct a logged bet to match what the app actually filled.
-    Kalshi: contracts and/or price per contract (the cost is worked out, fee included).
+    Kalshi: what you spent (stake) and the shares you got, as the order history shows them.
     Others: the stake (and for Fliff the decimal price). A settled bet's payout follows."""
     b = con.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
     if not b:
         raise SystemExit("No bet #%s." % bet_id)
-    legs = con.execute("SELECT * FROM bet_legs WHERE bet_id=? ORDER BY leg", (bet_id,)).fetchall()
     pay = b["payout"]
     if b["book"] == "kalshi":
-        n = int(contracts or b["contracts"] or 1)
-        ask = float(price if price is not None else legs[0]["price"])
-        if not (0 < ask < 1) or n < 1:
-            raise SystemExit("Kalshi needs a price between 1 and 99 cents and at least 1 contract.")
-        new = kalshi_cost(ask, n)
+        shares = round(float(contracts if contracts is not None else (b["contracts"] or 0)), 2)
+        if stake is not None:
+            spent = round(float(stake), 2)
+        elif price is not None:
+            spent = round(shares * float(price), 2)
+        else:
+            spent = b["stake"]
+        if shares <= 0 or not spent or spent <= 0:
+            raise SystemExit("Kalshi needs what you spent and the shares you got, both more than 0.")
+        per = spent / shares
+        if per >= 1:
+            raise SystemExit("That works out to %.0f cents a share - Kalshi shares cost under $1. Check the numbers." % (per * 100))
         if b["result"] == "win":
-            pay = float(n)
+            pay = shares
         elif b["result"] == "push":
-            pay = new
-        con.execute("UPDATE bets SET contracts=?, stake=?, payout=? WHERE id=?", (n, new, pay, bet_id))
-        con.execute("UPDATE bet_legs SET price=?, breakeven=? WHERE bet_id=?", (ask, ask + kalshi_fee(ask, n), bet_id))
+            pay = spent
+        con.execute("UPDATE bets SET contracts=?, stake=?, payout=? WHERE id=?", (shares, spent, pay, bet_id))
+        con.execute("UPDATE bet_legs SET price=?, breakeven=? WHERE bet_id=?", (per, per, bet_id))
         con.commit()
-        return "Bet #%d: %d contracts at %d cents, $%.2f with fee." % (bet_id, n, round(ask * 100), new)
+        return "Bet #%d: $%.2f for %.2f shares (%.1f cents each, fee included)." % (bet_id, spent, shares, per * 100)
     new = round(float(stake if stake is not None else b["stake"]), 2)
     if new <= 0:
         raise SystemExit("The stake has to be more than $0.")

@@ -56,6 +56,9 @@ pruned after 3 days.
    scores once the game is final. A pick'em entry with a voided or pushed leg, or a player the box score
    doesn't list, is left for you: tap Win / Loss / Push on Results.
 4. Lineup news? Tap Run again (it costs credits again).
+5. Logged something wrong? Every bet on Results has **Edit** (the stake; for Kalshi, what you spent and the
+   shares you got, straight from Kalshi's order history) and **Delete bet**, which asks first and can be
+   undone from **Deleted bets** at the bottom of Results.
 
 **Results** shows your record, profit, closing line value and leg hit rate; a profit-over-time chart and a
 CLV trend; and what's working by app, entry type, stat, flagged-vs-your-own picks, and (NFL) whether
@@ -76,7 +79,8 @@ It also shows **how close each leg came**, because a miss by one is a different 
 No key on a device? Save still works through GitHub: the bottom sheet has "or log it on GitHub instead".
 
 Only issues opened by the repo owner run anything, and only these commands:
-`bet`, `result`, `run` (or `refresh`), `ge-import`. Other issues are left alone.
+`bet`, `result`, `edit`, `delete`, `restore`, `run` (or `refresh`), `ge-import`. An issue can carry several
+command lines; they run in order. Other issues are left alone.
 
 The Actions tab → Edge Finder → **Run workflow** also offers: run-nba, run-nfl,
 gridiron-edge (export now), probe (check every feed answers), site-only.
@@ -90,7 +94,9 @@ gridiron-edge (export now), probe (check every feed answers), site-only.
 - **Best entries**: top flagged picks on one app, one per game (picks in the same game are
   correlated and can pay less), with the entry's expected return.
 - **Fliff**: flagged at 3%+ expected value at Fliff's price.
-- **Kalshi**: after the taker fee on 10 contracts; flagged at 3%+ return. Size = contracts offered.
+- **Kalshi**: after Kalshi's fee (0.07 × P × (1 − P) a share, what buying by the dollar costs); flagged at
+  3%+ return with 5+ contracts on offer. A dollar stake logs as fractional shares, the way Kalshi fills it;
+  with one Kalshi pick selected you can type the exact shares Kalshi shows before saving.
 - **adj**: a sharp line sat a little off this one (say 24.5 vs 23.5), so its price was moved using
   the stat's typical spread. Exact matches are stronger.
 - **Gridiron Edge** (NFL): its probability at the book's line plus EDGE. *agrees* (55%+),

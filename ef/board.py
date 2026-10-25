@@ -3,7 +3,7 @@ against the sharp consensus."""
 from collections import defaultdict
 
 from . import gridiron
-from .fair import breakeven, consensus, entry_return, kalshi_fee, stat_sigma
+from .fair import breakeven, consensus, entry_return, kalshi_share_fee, stat_sigma
 from .util import fmt_american, iso, local, parse_iso, short_team, utcnow
 
 MARKET_LABELS = {
@@ -209,7 +209,7 @@ def build(con, cfg, league, pull_id=None, now=None):
             base.update(ev=ev_pct, flagged=ev_pct >= th["fliff_min_ev"])
             fliff.append(with_ge(base, r["market"], r["point"], side))
         elif book == "kalshi":
-            fee = kalshi_fee(r["ask"], cfg["kalshi"]["contracts"])
+            fee = kalshi_share_fee(r["ask"])
             ev_c = c["p"] - r["ask"] - fee
             roi = ev_c / (r["ask"] + fee)
             deep = (r["size"] or 0) >= cfg["kalshi"].get("min_size", 0)

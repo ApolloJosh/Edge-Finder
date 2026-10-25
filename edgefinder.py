@@ -11,7 +11,7 @@ against the sharp books and flags the few worth betting.
   python3 edgefinder.py watch nba          closing snapshot before each game you bet
   python3 edgefinder.py result 7 win
   python3 edgefinder.py delete 7           take a bet out of your record (restore 7 undoes it)
-  python3 edgefinder.py edit 7 --contracts 4 --price 0.45   match a bet to what actually filled
+  python3 edgefinder.py edit 7 --stake 2 --contracts 4.18   match a bet to what actually filled
   python3 edgefinder.py bets               recent bets
   python3 edgefinder.py clv                closing line value report
 
@@ -176,12 +176,20 @@ def cmd_sweep_issues(cfg, con, args):
         first = ((it.get("title") or "").strip().split() or [""])[0].lower()
         if first not in web.ALLOWED:
             continue            # an ordinary issue, not a command - leave it alone
-        cmd = web.parse_issue(it.get("title"), it.get("body"))
-        if not cmd:
+        cmds = web.parse_commands(it.get("title"), it.get("body"))
+        if not cmds:
             ok, text, cmd = False, ("No command found. Use the Log button on the board, or write one line like:\n"
-                                    "result 7 win\nrefresh nba"), ["?"]
-        else:
+                                    "result 7 win\nrun nba"), ["?"]
+        elif len(cmds) == 1:
+            cmd = cmds[0]
             ok, text = handle_command(cmd, it["number"])
+        else:                     # several lines, run in order
+            ok, outs = True, []
+            for c in cmds:
+                o, t = handle_command(c, it["number"])
+                ok = ok and o
+                outs.append("$ %s\n%s" % (" ".join(c), t))
+            text, cmd = "\n\n".join(outs), ["%d commands" % len(cmds)]
         _gh("issue", "comment", str(it["number"]), "--repo", repo, "--body-file", "-",
             stdin=web.comment_for(cmd, ok, text))
         _gh("issue", "close", str(it["number"]), "--repo", repo)
@@ -254,7 +262,7 @@ def main(argv=None):
     sp.add_argument("--entry", help="pick'em entry type, e.g. pp5, ppf6, ud3")
     sp.add_argument("--stake", type=float, default=1.0)
     sp.add_argument("--price", type=float, help="decimal odds you actually got (Fliff) or ask paid (Kalshi)")
-    sp.add_argument("--contracts", type=int, help="Kalshi contracts bought")
+    sp.add_argument("--contracts", type=float, help="Kalshi shares you got (fractional is fine)")
     sp.add_argument("--note")
     sp.add_argument("--board", help="which board the numbers came from (the board page fills this in)")
 
@@ -269,8 +277,8 @@ def main(argv=None):
     sp = sub.add_parser("edit")
     sp.add_argument("bet_id", type=int)
     sp.add_argument("--stake", type=float)
-    sp.add_argument("--contracts", type=int, help="Kalshi contracts you actually got")
-    sp.add_argument("--price", type=float, help="Kalshi price per contract (0.45) or Fliff decimal odds")
+    sp.add_argument("--contracts", type=float, help="Kalshi shares you got (fractional is fine)")
+    sp.add_argument("--price", type=float, help="Fliff decimal odds you got")
 
     sp = sub.add_parser("result")
     sp.add_argument("bet_id", type=int)

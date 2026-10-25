@@ -228,6 +228,17 @@ def breakeven(n, pays):
 # ---------------------------------------------------------------- Kalshi
 
 
+def kalshi_share_fee(price, rate=0.07):
+    """Kalshi's fee per share when you buy by the dollar: 0.07 x P x (1 - P), not rounded.
+    Matches the app's fills: $2 at 46 cents is 4.18 shares at 47.7 cents each, fee included."""
+    return rate * price * (1 - price)
+
+
+def kalshi_shares(stake, ask):
+    """Shares a dollar stake buys at `ask`, fee included (Kalshi shows two decimals)."""
+    return math.floor(stake / (ask + kalshi_share_fee(ask)) * 100 + 1e-6) / 100
+
+
 def kalshi_fee(price, contracts=10, multiplier=1.0, rate=0.07):
     """Kalshi taker fee per contract in dollars:
     round_up(0.07 * C * P * (1 - P)) to the cent, spread over C contracts."""

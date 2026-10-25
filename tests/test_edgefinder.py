@@ -19,7 +19,7 @@ from ef import board as boardmod  # noqa: E402
 from ef import gridiron, render  # noqa: E402
 from ef.config import load_config  # noqa: E402
 from ef.db import connect  # noqa: E402
-from ef.fair import (breakeven, consensus, devig_pair, entry_return, kalshi_fee,  # noqa: E402
+from ef.fair import (breakeven, consensus, devig_pair, entry_return, kalshi_fee, kalshi_share_fee,  # noqa: E402
                      shift_over)
 from ef.sources import kalshi_game_date, pull_kalshi, pull_odds  # noqa: E402
 from ef.util import iso, local, player_key, utcnow  # noqa: E402
@@ -87,6 +87,7 @@ class Math(unittest.TestCase):
         self.assertAlmostEqual(kalshi_fee(0.50, 1), 0.02)
         self.assertAlmostEqual(kalshi_fee(0.50, 10), 0.018)
         self.assertAlmostEqual(kalshi_fee(0.95, 100), 0.0034)
+        self.assertAlmostEqual(kalshi_share_fee(0.50), 0.0175)          # buying by the dollar: no rounding
 
     def test_kalshi_date(self):
         self.assertEqual(kalshi_game_date("KXNBAPTS-26OCT24HOUATL"), "2026-10-24")
@@ -240,7 +241,7 @@ class Pipeline(unittest.TestCase):
         kal = [x for x in b["kalshi"] if x["point"] == 23.5 and x["side"] == "over"]
         self.assertEqual(len(kal), 1, "Kalshi 24+ should match Alpha's game by date")
         self.assertEqual(kal[0]["event_id"], "ev1")
-        self.assertAlmostEqual(kal[0]["ev"], kal[0]["p"] - 0.50 - kalshi_fee(0.5, 10))
+        self.assertAlmostEqual(kal[0]["ev"], kal[0]["p"] - 0.50 - kalshi_share_fee(0.5))
         self.assertFalse(any(x["point"] == 34.5 for x in b["kalshi"]), "35+ is 10 points off - must be dropped")
 
         ud3 = [e for e in b["entries"] if e["entry"] == "ud3"]

@@ -407,14 +407,13 @@ class DeleteBets(unittest.TestCase):
 
 
 class KalshiStake(unittest.TestCase):
-    def test_contracts_never_go_over_the_stake(self):
-        from ef.bets import kalshi_contracts, kalshi_cost
-        self.assertEqual((kalshi_contracts(2, 0.45), kalshi_cost(0.45, 4)), (4, 1.87))   # Huntley: $1.80 + 7c fee
-        for ask in (0.05, 0.28, 0.38, 0.42, 0.5, 0.67, 0.9, 0.97):
-            for stake in (1, 2, 3, 5):
-                n = kalshi_contracts(stake, ask)
-                self.assertTrue(n == 1 or kalshi_cost(ask, n) <= stake, (ask, stake, n))
-                self.assertGreater(kalshi_cost(ask, n + 1), stake, (ask, stake, n))
+    def test_shares_match_kalshi_fills(self):
+        """Kalshi's order history: $2 at 46c -> 4.18 shares at 47.7c; 54c -> 3.58; 28c -> 6.80."""
+        from ef.fair import kalshi_shares
+        self.assertEqual(kalshi_shares(2, 0.46), 4.18)
+        self.assertEqual(kalshi_shares(2, 0.54), 3.58)
+        self.assertEqual(kalshi_shares(2, 0.28), 6.80)
+        self.assertEqual(kalshi_shares(2, 0.34), 5.62)
 
     def test_edit(self):
         con = connect(os.path.join(tempfile.mkdtemp(), "e.db"))
@@ -426,18 +425,21 @@ class KalshiStake(unittest.TestCase):
         k = b["kalshi"][0]
         bid = betlog.log_bet(con, CFG, "nba", [k["code"]], stake=2, board_ts=b["built_at"])[0]
         row = con.execute("SELECT * FROM bets WHERE id=?", (bid,)).fetchone()
-        self.assertLessEqual(row["stake"], 2)
-        bid2 = betlog.log_bet(con, CFG, "nba", [k["code"]], stake=2, contracts=4, price=0.45, board_ts=b["built_at"])[0]
-        self.assertEqual(con.execute("SELECT stake, contracts FROM bets WHERE id=?", (bid2,)).fetchone()[:], (1.87, 4))
+        self.assertEqual(row["stake"], 2.0)                       # the stake is what you spend
+        from ef.fair import kalshi_shares
+        self.assertEqual(row["contracts"], kalshi_shares(2, k["ask"]))
+        bid2 = betlog.log_bet(con, CFG, "nba", [k["code"]], stake=2, contracts=4.18, board_ts=b["built_at"])[0]
+        self.assertEqual(tuple(con.execute("SELECT stake, contracts FROM bets WHERE id=?", (bid2,)).fetchone()), (2.0, 4.18))
 
-        msg = betlog.edit_bet(con, CFG, bid2, contracts=5, price=0.40)
-        self.assertIn("5 contracts at 40 cents", msg)
-        r = con.execute("SELECT stake, contracts FROM bets WHERE id=?", (bid2,)).fetchone()
-        self.assertEqual((r["contracts"], r["stake"]), (5, betlog.kalshi_cost(0.40, 5)))
-        self.assertAlmostEqual(con.execute("SELECT price FROM bet_legs WHERE bet_id=?", (bid2,)).fetchone()["price"], 0.40)
+        msg = betlog.edit_bet(con, CFG, bid2, stake=2.59, contracts=6.36)
+        self.assertIn("$2.59 for 6.36 shares", msg)
+        self.assertAlmostEqual(con.execute("SELECT price FROM bet_legs WHERE bet_id=?", (bid2,)).fetchone()["price"], 2.59 / 6.36)
         betlog.set_result(con, CFG, bid2, "win")
-        betlog.edit_bet(con, CFG, bid2, contracts=6)
-        self.assertEqual(con.execute("SELECT payout FROM bets WHERE id=?", (bid2,)).fetchone()["payout"], 6.0)
+        self.assertAlmostEqual(con.execute("SELECT payout FROM bets WHERE id=?", (bid2,)).fetchone()["payout"], 6.36)
+        betlog.edit_bet(con, CFG, bid2, stake=2, contracts=4.18)
+        self.assertAlmostEqual(con.execute("SELECT payout FROM bets WHERE id=?", (bid2,)).fetchone()["payout"], 4.18)
+        with self.assertRaises(SystemExit):
+            betlog.edit_bet(con, CFG, bid2, stake=5, contracts=4)          # $1.25 a share can't be right
 
         fl = [x for x in b["fliff"] if x["side"] == "over"][0]
         fid = betlog.log_bet(con, CFG, "nba", [fl["code"]], stake=3, board_ts=b["built_at"])[0]
@@ -447,3 +449,11 @@ class KalshiStake(unittest.TestCase):
         self.assertEqual(r["stake"], 2.0)
         self.assertAlmostEqual(r["payout"], 2 * 2.10)
         self.assertIn("edit", web.ALLOWED)
+
+    def test_issue_with_several_commands(self):
+        body = "Matching Kalshi's order history:\n```\nedit 1 --stake 2 --contracts 3.58\nedit 3 --stake 2 --contracts 4.18\n```"
+        self.assertEqual(web.parse_commands("edit Kalshi bets", body),
+                         [["edit", "1", "--stake", "2", "--contracts", "3.58"], ["edit", "3", "--stake", "2", "--contracts", "4.18"]])
+        self.assertEqual(web.parse_commands("result 7 win", ""), [["result", "7", "win"]])
+        app = "```\nbet nba 4 --stake 2 --board 2026-10-25T10:00:00Z\n```\nSaved from the Edge Finder app."
+        self.assertEqual(len(web.parse_commands("bet nba #4 $2", app)), 1)

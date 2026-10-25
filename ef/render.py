@@ -106,10 +106,9 @@ box-shadow:var(--shadow);border-radius:16px 16px 0 0;transform:translateY(110%);
 .stepper button{background:transparent;color:var(--ink);border:0;border-radius:0;min-width:44px;font-size:20px;padding:0}
 .stepper span{min-width:46px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
 .d3{margin-top:8px;font-size:13.5px;color:var(--dim);min-height:19px}
-.kbuy{display:flex;gap:10px;align-items:center}
-.kbuy[hidden],.stepper[hidden]{display:none}
-.kp{display:flex;align-items:center;gap:5px;font-weight:650;color:var(--dim)}
-.kp input{width:64px;min-height:44px;font:inherit;font-size:16px;font-weight:700;text-align:center;border:1px solid var(--line);
+.kp[hidden]{display:none}
+.kp{display:flex;align-items:center;gap:7px;font-weight:650;color:var(--dim)}
+.kp input{width:84px;min-height:44px;font:inherit;font-size:16px;font-weight:700;text-align:center;border:1px solid var(--line);
 border-radius:10px;background:var(--bg);color:var(--ink)}
 .d4{display:flex;gap:8px;margin-top:10px}
 .d4 .btn,.d4 button{flex:1}
@@ -243,7 +242,7 @@ def payload(board, cfg, root, web):
         "counts": {b: board["counts"].get(b, 0) for b in ("prizepicks", "underdog", "fliff", "kalshi")},
         "geSaved": board.get("ge_saved"), "games": board["games"],
         "th": {"cush": th["pickem_cushion"], "fliff": th["fliff_min_ev"], "kalshi": th["kalshi_min_ev"],
-               "kc": cfg["kalshi"]["contracts"], "kmin": cfg["kalshi"].get("min_size", 0),
+               "kmin": cfg["kalshi"].get("min_size", 0),
                "minb": 1 if th.get("one_book_ok") else th["min_sharp_books"]},
         "offsets": cfg.get("auto", {}).get("board_offsets_min", [90, 30]),
     }
@@ -278,8 +277,7 @@ BODY = """<body>
 <div class="d1"><span id="dsum"></span><button class="link" id="clear">Clear</button></div>
 <div class="d2"><select id="entry" aria-label="Entry type"></select>
 <div class="stepper" id="sstep"><button id="minus" aria-label="Less">−</button><span>$<b id="stake">1</b></span><button id="plus" aria-label="More">+</button></div>
-<div class="kbuy" id="kbuy" hidden><div class="stepper"><button id="kminus" aria-label="Fewer contracts">−</button><span><b id="kc">1</b> <small>ct</small></span><button id="kplus" aria-label="More contracts">+</button></div>
-<label class="kp">at <input id="kp" type="number" inputmode="numeric" min="1" max="99" step="1" aria-label="Price per contract in cents">¢</label></div></div>
+<label class="kp" id="kbuy" hidden><input id="ks" type="number" inputmode="decimal" min="0.01" step="0.01" aria-label="Shares Kalshi filled"> shares</label></div>
 <div class="d3" id="dexp"></div>
 <div class="d4">%(primary)s<button class="ghost" id="copy">Copy</button></div>
 <div class="cmd" id="cmd"></div>%(fallback)s
@@ -302,12 +300,10 @@ const LG = D.league.toUpperCase();
 let view = 'flag', app = 'all', sort = 'v';
 const picked = new Map();
 let stake = 1;
-// Kalshi sells whole contracts, so a dollar stake becomes contracts (fee included, never over the stake).
-// One Kalshi pick at a time can be set to exactly what filled: contracts and price.
-let kc = null, kp = null, kkey = '', kn = 1;
-const kFee = (p, n) => Math.ceil(+(0.07 * n * p * (1 - p) * 100).toFixed(6)) / 100;
-const kCost = (p, n) => Math.round((n * p + kFee(p, n)) * 100) / 100;
-const kFit = (s, p) => { let n = Math.max(1, Math.floor(s / p + 1e-9)); while (n > 1 && kCost(p, n) > s + 1e-9) n--; return n; };
+// Kalshi buys by the dollar and fills fractional shares at ask + fee (0.07 x P x (1 - P) a share).
+// One Kalshi pick at a time can take the exact shares Kalshi shows.
+let ks = null, kkey = '';
+const kShares = (s, p) => Math.floor(s / (p + 0.07 * p * (1 - p)) * 100 + 1e-6) / 100;
 try { stake = Math.max(1, parseInt(localStorage.getItem('ef-stake') || '1', 10) || 1); } catch (e) {}
 
 function ago(iso) {
@@ -336,7 +332,7 @@ if (D.notes.length) {
 } else $('#notes').remove();
 $('#h-pickem').textContent = `flagged when fair beats an entry's per-pick breakeven by ${(D.th.cush*100).toFixed(0)}+ pt`;
 $('#h-fliff').textContent = `flagged at ${(D.th.fliff*100).toFixed(0)}%+ expected value`;
-$('#h-kalshi').textContent = `after the fee on ${D.th.kc} contracts; flagged at ${(D.th.kalshi*100).toFixed(0)}%+ return with ${D.th.kmin}+ on offer`;
+$('#h-kalshi').textContent = `after Kalshi's fee; flagged at ${(D.th.kalshi*100).toFixed(0)}%+ return with ${D.th.kmin}+ on offer`;
 const counts = Object.entries(D.counts).map(([b, n]) => `${{prizepicks:'PrizePicks',underdog:'Underdog',fliff:'Fliff',kalshi:'Kalshi'}[b]} ${n}`).join(' · ');
 $('#foot').innerHTML = `Lines in the latest pull: ${esc(counts)}.<br>Per-pick breakevens: ${esc(D.be)}.<br>Fair = the sharp books' chance of the pick hitting, margin removed, using the
   less generous of two methods. <span class="tag adj">adj</span> = a sharp line sat a little off this one and its price was moved here;
@@ -476,20 +472,18 @@ function dock(preferEntry) {
   }
   const kal = legs.filter(r => r.s === 'kalshi');
   const single = legs.length === 1 && kal.length === 1;
-  $('#sstep').hidden = single; $('#kbuy').hidden = !single;
-  let kargs = '', cost = null;
+  $('#kbuy').hidden = !single;
+  let kargs = '';
   if (single) {
     const r = kal[0];
-    if (kkey !== r.c) { kkey = r.c; kc = null; kp = null; }
-    const price = kp != null ? kp / 100 : r.ask;
-    kn = kc != null ? kc : kFit(stake, price);
-    cost = kCost(price, kn);
-    $('#kc').textContent = kn;
-    if (document.activeElement !== $('#kp')) $('#kp').value = Math.round(price * 100);
-    exp = `${kn} contract${kn > 1 ? 's' : ''} · <b>$${cost.toFixed(2)}</b> with fee · pays $${kn.toFixed(2)} if it hits. Match what Kalshi filled.`;
-    kargs = ` --contracts ${kn} --price ${price.toFixed(2)}`;
+    if (kkey !== r.c) { kkey = r.c; ks = null; }
+    const est = kShares(stake, r.ask), sh = ks != null ? ks : est;
+    if (document.activeElement !== $('#ks')) $('#ks').value = sh.toFixed(2);
+    exp = (ks != null ? `${sh.toFixed(2)} shares at ${(100 * stake / sh).toFixed(1)}¢` : `About ${est.toFixed(2)} shares at ${(100 * stake / est).toFixed(1)}¢`) +
+          ` with fee · pays <b>$${sh.toFixed(2)}</b> if it hits. Type the shares Kalshi shows to log it exactly.`;
+    kargs = ` --contracts ${sh.toFixed(2)}`;
   } else if (kal.length) {
-    const list = kal.slice(0, 3).map(r => { const n = kFit(stake, r.ask); return `${esc(r.pl.split(' ').slice(-1)[0])} ${n} ct $${kCost(r.ask, n).toFixed(2)}`; });
+    const list = kal.slice(0, 3).map(r => `${esc(r.pl.split(' ').slice(-1)[0])} ≈${kShares(stake, r.ask).toFixed(2)} sh`);
     exp += `<br>Kalshi: ${list.join(' · ')}${kal.length > 3 ? ` · +${kal.length - 3} more` : ''}`;
   }
   sel.style.display = types && sel.options.length ? '' : 'none';
@@ -503,7 +497,7 @@ function dock(preferEntry) {
   const save = $('#save');
   if (save) { save.disabled = !!msg; save.textContent = window.EF && EF.token() ? 'Save bet' : 'Save bet (set up once)'; }
   summary = (types && sel.value ? types[sel.value].label : legs.map(r => r.bl).filter((x, i, a) => a.indexOf(x) === i).join(' + ')) +
-            ' · $' + (cost != null ? cost.toFixed(2) : stake) + ' · ' + legs.map(r => `${r.pl} ${r.pk} ${r.m}`).join(', ');
+            ' · $' + stake + ' · ' + legs.map(r => `${r.pl} ${r.pk} ${r.m}`).join(', ');
 }
 let summary = '';
 if ($('#save')) $('#save').onclick = async () => {
@@ -518,13 +512,11 @@ if ($('#save')) $('#save').onclick = async () => {
 };
 $('#entry').onchange = () => dock();
 window.addEventListener('ef-auth', () => dock());
-const setStake = v => { stake = Math.max(1, Math.min(100, v)); try { localStorage.setItem('ef-stake', stake); } catch (e) {} dock(); };
+const setStake = v => { stake = Math.max(1, Math.min(100, v)); ks = null; try { localStorage.setItem('ef-stake', stake); } catch (e) {} dock(); };
 $('#minus').onclick = () => setStake(stake - 1);
 $('#plus').onclick = () => setStake(stake + 1);
-$('#kminus').onclick = () => { kc = Math.max(1, kn - 1); dock(); };
-$('#kplus').onclick = () => { kc = Math.min(500, kn + 1); dock(); };
-$('#kp').oninput = () => { const v = parseInt($('#kp').value, 10); if (v >= 1 && v <= 99) { kp = v; dock(); } };
-$('#kp').onblur = () => dock();
+$('#ks').oninput = () => { const v = parseFloat($('#ks').value); if (v > 0 && stake / v < 1) { ks = Math.round(v * 100) / 100; dock(); } };
+$('#ks').onblur = () => dock();
 $('#clear').onclick = () => { picked.clear(); draw(); dock(); };
 $('#copy').onclick = async () => {
   const t = $('#cmd').textContent;
