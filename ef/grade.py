@@ -160,9 +160,9 @@ class ESPN:
         return self.summaries[event_id]
 
 
-def grade_open_bets(con, cfg, now=None, fetch=http_get, aliases=None, log=print):
+def grade_open_bets(con, cfg, now=None, fetch=http_get, aliases=None, log=print, counts=None):
     """Grade legs whose games are done, then settle bets whose legs are all graded.
-    Returns the number of bets settled."""
+    Returns the number of bets settled; `counts` (a dict) also gets legs graded."""
     now = now or utcnow()
     espn = ESPN(fetch)
     # Legs of bets you settled by hand get their numbers too (for closeness), for a few days.
@@ -198,6 +198,8 @@ def grade_open_bets(con, cfg, now=None, fetch=http_get, aliases=None, log=print)
                 continue
         con.execute("UPDATE bet_legs SET actual=?, leg_result=? WHERE bet_id=? AND leg=?",
                     (val, res, l["bet_id"], l["leg"]))
+        if counts is not None:
+            counts["legs"] = counts.get("legs", 0) + 1
     con.commit()
 
     settled = 0

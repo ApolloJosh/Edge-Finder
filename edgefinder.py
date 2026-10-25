@@ -130,8 +130,9 @@ def cmd_auto(cfg, con, args):
                 lg.upper(), r.get("games_ahead", 0), "yes" if r["board_pull"] else "no", r["close_pulls"],
                 r["credits"], (" (" + r["skipped"] + ")") if r["skipped"] else ""))
     try:
-        n = grademod.grade_open_bets(con, cfg, aliases=load_aliases(), log=notice)
-        changed = changed or n > 0
+        counts = {}
+        n = grademod.grade_open_bets(con, cfg, aliases=load_aliases(), log=notice, counts=counts)
+        changed = changed or n > 0 or counts.get("legs", 0) > 0
     except Exception as e:  # grading must never stop the scheduled pass
         notice("Grading skipped: %s" % e)
     automod.prune(con)
