@@ -8,12 +8,14 @@ is settled when every leg is graded:
 A leg is only voided when ESPN lists the player as not playing. A player who
 isn't in the box score at all (inactive, or a name ESPN spells differently) is
 marked "review" and the bet is left for you rather than guessed.
-Bets you've already settled by hand are never touched.
+Bets you've already settled by hand are never re-settled, but their legs still
+get the player's number (for how-close stats). Any number can be fixed by hand
+with `actual BET LEG VALUE` (Fix stat on Results); a fixed leg is never regraded.
 """
 from datetime import timedelta
 
 from .sources import get_json, http_get
-from .util import local, parse_iso, player_key, short_team, utcnow
+from .util import iso, local, parse_iso, player_key, short_team, utcnow
 
 SPORT = {"nba": "basketball/nba", "nfl": "football/nfl"}
 BASE = "https://site.api.espn.com/apis/site/v2/sports/%s/%s"
@@ -161,13 +163,14 @@ class ESPN:
 def grade_open_bets(con, cfg, now=None, fetch=http_get, aliases=None, log=print):
     """Grade legs whose games are done, then settle bets whose legs are all graded.
     Returns the number of bets settled."""
-    from .bets import set_result
     now = now or utcnow()
     espn = ESPN(fetch)
+    # Legs of bets you settled by hand get their numbers too (for closeness), for a few days.
     legs = con.execute(
         "SELECT l.*, b.league, e.home, e.away FROM bet_legs l JOIN bets b ON b.id=l.bet_id"
         " LEFT JOIN events e ON e.event_id=l.event_id"
-        " WHERE b.result IS NULL AND b.deleted_at IS NULL AND l.leg_result IS NULL AND l.commence_time IS NOT NULL").fetchall()
+        " WHERE b.deleted_at IS NULL AND l.leg_result IS NULL AND l.commence_time IS NOT NULL"
+        " AND (b.result IS NULL OR l.commence_time > ?)", (iso(now - timedelta(days=3)),)).fetchall()
     boxes = {}
     for l in legs:
         if parse_iso(l["commence_time"]) + timedelta(hours=FINAL_AFTER.get(l["league"], 3)) > now:
@@ -199,28 +202,76 @@ def grade_open_bets(con, cfg, now=None, fetch=http_get, aliases=None, log=print)
 
     settled = 0
     for b in con.execute("SELECT * FROM bets WHERE result IS NULL AND deleted_at IS NULL").fetchall():
-        ls = con.execute("SELECT * FROM bet_legs WHERE bet_id=?", (b["id"],)).fetchall()
-        if not ls or any(l["leg_result"] is None for l in ls):
-            continue
-        results = [l["leg_result"] for l in ls]
-        if "review" in results:
-            continue              # a player we couldn't find - yours to settle
-        if b["book"] in cfg.pickem_books:
-            if any(r in ("void", "push") for r in results):
-                continue          # apps re-price these; leave for a manual result
-            hits = results.count("hit")
-            outcome = "win" if hits == len(ls) else ("partial" if hits and _pays(cfg, b, hits) else "loss")
-            set_result(con, cfg, b["id"], outcome, hits=hits)
-        else:
-            r = results[0]
-            outcome = {"hit": "win", "miss": "loss"}.get(r, "push")
-            set_result(con, cfg, b["id"], outcome)
-        con.execute("UPDATE bets SET graded_by='auto' WHERE id=?", (b["id"],))
-        con.commit()
-        settled += 1
+        if settle(con, cfg, b, "auto"):
+            settled += 1
     if settled:
         log("Graded %d bet(s) from ESPN box scores." % settled)
     return settled
+
+
+def settle(con, cfg, b, by):
+    """Settle a bet from its legs. Returns the outcome, or None when it can't be
+    settled from the legs alone (a leg not graded yet, a player we couldn't find,
+    or a pick'em entry with a void/push that the app re-prices)."""
+    from .bets import set_result
+    ls = con.execute("SELECT * FROM bet_legs WHERE bet_id=?", (b["id"],)).fetchall()
+    results = [l["leg_result"] for l in ls]
+    if not ls or None in results or "review" in results:
+        return None
+    if b["book"] in cfg.pickem_books:
+        if any(r in ("void", "push") for r in results):
+            return None
+        hits = results.count("hit")
+        outcome = "win" if hits == len(ls) else ("partial" if hits and _pays(cfg, b, hits) else "loss")
+        set_result(con, cfg, b["id"], outcome, hits=hits)
+    else:
+        outcome = {"hit": "win", "miss": "loss"}.get(results[0], "push")
+        set_result(con, cfg, b["id"], outcome)
+    con.execute("UPDATE bets SET graded_by=? WHERE id=?", (by, b["id"]))
+    con.commit()
+    return outcome
+
+
+def set_actual(con, cfg, bet_id, leg, value):
+    """Fix a player's final number by hand (ESPN had it wrong, or couldn't find
+    the player). value: a number, "dnp" (didn't play: the leg is void), or
+    "clear" (forget the fix; the next run grades it from the box score again).
+    The leg's result follows, and the bet re-settles from its legs."""
+    b = con.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
+    if not b:
+        raise SystemExit("No bet #%s." % bet_id)
+    l = con.execute("SELECT * FROM bet_legs WHERE bet_id=? AND leg=?", (bet_id, leg)).fetchone()
+    if not l:
+        raise SystemExit("Bet #%s has no leg %s." % (bet_id, leg))
+    v = str(value).strip().lower()
+    if v == "clear":
+        act, res = None, None
+    elif v in ("dnp", "void"):
+        act, res = None, "void"
+    else:
+        try:
+            act = float(v)
+        except ValueError:
+            raise SystemExit("Give a number, dnp, or clear.")
+        if act < 0 and "yds" not in l["market"]:
+            raise SystemExit("Only yards can be negative.")
+        res = leg_result(act, l["point"], l["side"])
+    con.execute("UPDATE bet_legs SET actual=?, leg_result=? WHERE bet_id=? AND leg=?", (act, res, bet_id, leg))
+    con.commit()
+    what = "cleared" if v == "clear" else ("didn't play (void)" if res == "void" else "%g (%s)" % (act, res))
+    msg = "Bet #%d leg %d, %s: %s." % (bet_id, leg, l["player"], what)
+    outcome = None if v == "clear" else settle(con, cfg, b, "fixed")
+    if outcome:
+        nb = con.execute("SELECT payout FROM bets WHERE id=?", (bet_id,)).fetchone()
+        return msg + " Bet settled: %s, $%.2f." % (outcome, nb["payout"] or 0)
+    if b["result"] is not None:
+        # It was settled, but the legs no longer settle it on their own: open it again.
+        con.execute("UPDATE bets SET result=NULL, payout=NULL, graded_by=NULL WHERE id=?", (bet_id,))
+        con.commit()
+        if v == "clear":
+            return msg + " The bet is open again; the next run grades it from the box score."
+        return msg + " The bet is open again: set its result on Results."
+    return msg
 
 
 def _pays(cfg, b, hits):

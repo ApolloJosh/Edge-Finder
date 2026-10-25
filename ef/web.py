@@ -24,7 +24,7 @@ from .util import local, parse_iso, utcnow
 E = html.escape
 
 # Commands an issue may run. Anything else is refused.
-ALLOWED = {"bet", "bet-line", "result", "edit", "delete", "restore", "run", "refresh", "ge-import"}
+ALLOWED = {"bet", "bet-line", "result", "actual", "edit", "delete", "restore", "run", "refresh", "ge-import"}
 
 
 def parse_issue(title, body):
@@ -440,11 +440,11 @@ def results_payload(con, cfg, repo, now):
             "bl": BOOK_LABELS.get(b["book"], b["book"]), "entry": entry, "et": b["entry_type"],
             "stake": round(b["stake"] or 0, 2), "res": b["result"],
             "pay": None if b["payout"] is None else round(b["payout"], 2),
-            "auto": b["graded_by"] == "auto", "note": b["notes"], "start": min(starts) if starts else None,
+            "auto": b["graded_by"] == "auto", "fixed": b["graded_by"] == "fixed", "note": b["notes"], "start": min(starts) if starts else None,
             "could": could, "ct": b["contracts"],
             "legs": [dict({"pl": l["player"], "m": market_label(l["market"]), "side": l["side"], "pt": l["point"],
                            "fair": l["fair_p"], "close": l["close_fair_p"], "fl": l["flagged"], "edge": l["edge"],
-                           "price": l["price"],
+                           "price": l["price"], "n": l["leg"], "t": l["commence_time"],
                            "act": l["actual"], "lr": l["leg_result"], "gp": l["ge_p"], "lg": b["league"]},
                           **closeness(l)) for l in legs],
         })
@@ -485,6 +485,12 @@ line-height:1.35;white-space:nowrap;display:none;z-index:2}
 .mark.hit{color:var(--accent)}.mark.miss{color:var(--bad)}.mark.other{color:var(--faint)}
 .badge.saving,.badge.hook{background:var(--warn-bg);color:var(--warn)}
 .cardfoot{display:flex;justify-content:flex-end;gap:14px;margin-top:6px}
+.fixrow{display:flex;align-items:center;gap:10px;margin-top:3px}
+button.link.fix{font-size:12.5px;padding:4px 0;min-height:30px;color:var(--faint)}
+button.link.fix.need{color:var(--accent)}
+.fx-prev{font-weight:650;color:var(--ink)}
+.fld.chk{justify-content:flex-start;gap:10px}
+.fld.chk input{width:22px;min-height:22px;height:22px}
 .fld{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:8px 0;font-weight:600;color:var(--ink)}
 .fld input{width:110px;min-height:44px;font:inherit;font-size:16px;font-weight:700;text-align:center;border:1px solid var(--line);
 border-radius:10px;background:var(--bg);color:var(--ink)}
@@ -704,9 +710,11 @@ function render() {
   const liveIds = new Set(D.bets.map(b => b.id));
   const pend = EF.pending(p => p.kind === 'bet' ? recorded.has('issue #' + p.n) : p.kind === 'result' ? settledIds.has(p.bet)
     : p.kind === 'delete' ? !liveIds.has(p.bet) : p.kind === 'restore' ? liveIds.has(p.bet)
-    : p.kind === 'edit' ? D.bets.some(b => b.id === p.bet && Math.abs(b.stake - p.stake) < 0.005) || Date.now() - p.ts > 15 * 60e3 : false);
+    : p.kind === 'edit' ? D.bets.some(b => b.id === p.bet && Math.abs(b.stake - p.stake) < 0.005) || Date.now() - p.ts > 15 * 60e3
+    : p.kind === 'fix' ? fixLanded(all, p) || Date.now() - p.ts > 15 * 60e3 : false);
   const deleting = new Set(pend.filter(p => p.kind === 'delete').map(p => p.bet));
   editing = new Set(pend.filter(p => p.kind === 'edit').map(p => p.bet));
+  fixing = new Map(pend.filter(p => p.kind === 'fix').map(p => [p.bet + ':' + p.leg, p.value]));
   const restoring = new Set(pend.filter(p => p.kind === 'restore').map(p => p.bet));
   const bets = D.bets.filter(b => !deleting.has(b.id)).filter(inScope);
   const settled = bets.filter(b => b.res != null).sort((a, b) => (a.start || a.placed).localeCompare(b.start || b.placed));
@@ -799,15 +807,15 @@ function betCard(b, savingResult) {
   const head = `<div class="row1"><b>#${b.id} ${esc(b.entry)}</b><span class="big">$${b.stake.toFixed(2)}</span></div>
 <div class="meta">${esc(b.lg.toUpperCase())} · placed ${esc(when(b.placed))}${b.start ? ' · starts ' + esc(when(b.start)) : ''}</div>`;
   const legs = '<ul class="legs2 viz">' + b.legs.map(l => {
-    const mk = l.lr === 'hit' ? '<span class="mark hit">✓</span>' : l.lr === 'miss' ? '<span class="mark miss">✗</span>' : l.lr ? `<span class="mark other">${esc(l.lr)}</span>` : '';
+    const mk = l.lr === 'hit' ? '<span class="mark hit">✓</span>' : l.lr === 'miss' ? '<span class="mark miss">✗</span>' : l.lr && l.lr !== 'review' ? `<span class="mark other">${esc(l.lr)}</span>` : '';
     const clv = l.close != null ? ` · close ${pct(l.close, 1)} <b class="${l.close >= l.fair ? 'pos' : 'neg'}">${sgn(100 * (l.close - l.fair))}</b>` : '';
-    return `<li>${mk}<b>${esc(l.pl)}</b> ${l.side === 'over' ? 'Over' : 'Under'} ${l.pt} ${esc(l.m)}<div class="meta">fair ${pct(l.fair, 1)}${clv}</div>${legClose(l)}</li>`;
+    return `<li>${mk}<b>${esc(l.pl)}</b> ${l.side === 'over' ? 'Over' : 'Under'} ${l.pt} ${esc(l.m)}<div class="meta">fair ${pct(l.fair, 1)}${clv}</div>${legClose(l)}${fixLink(b, l)}</li>`;
   }).join('') + '</ul>';
   if (b.res != null) {
     const cls = o === 'W' ? 'win' : o === 'L' ? 'loss' : '';
     const g = b.legs.filter(l => l.lr === 'hit' || l.lr === 'miss'), hitN = g.filter(l => l.lr === 'hit').length;
     const tally = b.legs.length > 1 && g.length ? ` · ${hitN} of ${b.legs.length} hit` : '';
-    return `<div class="card bet">${head}<div class="meta"><span class="badge ${cls}">${esc(b.res)} · $${(b.pay || 0).toFixed(2)}</span>${tally}${b.auto ? ' · graded from the box score' : ''}</div>${closeCall(b) ? `<div class="meta" style="margin-top:6px">${closeCall(b)}</div>` : ''}${legs}${delBtn(b)}</div>`;
+    return `<div class="card bet">${head}<div class="meta"><span class="badge ${cls}">${esc(b.res)} · $${(b.pay || 0).toFixed(2)}</span>${tally}${b.auto ? ' · graded from the box score' : b.fixed ? ' · settled from your fix' : ''}</div>${closeCall(b) ? `<div class="meta" style="margin-top:6px">${closeCall(b)}</div>` : ''}${legs}${delBtn(b)}</div>`;
   }
   const stale = b.start && Date.now() - Date.parse(b.start) > 5 * 3600e3;
   const btns = savingResult ? `<div class="meta" style="margin-top:10px"><span class="badge saving">saving ${esc(savingResult)}</span></div>` :
@@ -816,7 +824,19 @@ function betCard(b, savingResult) {
 }
 const delBtn = b => editing.has(b.id) ? '<div class="cardfoot"><span class="badge saving">saving edit</span></div>'
   : `<div class="cardfoot"><button class="link del" data-edit="${b.id}">Edit</button><button class="link del" data-del="${b.id}">Delete bet</button></div>`;
-let editing = new Set();
+let editing = new Set(), fixing = new Map();
+function fixLanded(all, p) {
+  const b = all.find(x => x.id === p.bet), l = b && b.legs.find(x => x.n === p.leg);
+  if (!l) return false;
+  return p.value === 'clear' ? l.lr == null : p.value === 'dnp' ? l.lr === 'void' : l.act === +p.value;
+}
+function fixLink(b, l) {
+  const key = b.id + ':' + l.n;
+  if (fixing.has(key)) return '<div class="fixrow"><span class="badge saving">saving fix</span></div>';
+  if (l.lr === 'review') return `<div class="fixrow"><span class="badge saving">not in the box score</span><button class="link fix need" data-fix="${key}">Enter result</button></div>`;
+  if (l.lr == null && !(l.t && Date.parse(l.t) < Date.now())) return '';
+  return `<div class="fixrow"><button class="link fix${l.lr == null ? ' need' : ''}" data-fix="${key}">${l.lr == null ? 'Enter result' : 'Fix stat'}</button></div>`;
+}
 
 
 document.addEventListener('click', async e => {
@@ -833,6 +853,42 @@ document.addEventListener('click', async e => {
     if (!ok) return;
     const n = await EF.send(`delete ${b.id}`, 'delete', {bet: b.id});
     if (n) EF.toast(`Bet #${b.id} deleted.`);
+    render(); return;
+  }
+  const fx = e.target.closest('[data-fix]');
+  if (fx) {
+    const [bid, n] = fx.dataset.fix.split(':').map(Number);
+    const b = D.bets.find(x => x.id === bid), l = b && b.legs.find(x => x.n === n);
+    if (!l) return;
+    const need = l.side === 'over' ? `${num(l.need)}+` : `${num(l.need)} or fewer`;
+    let back = false;
+    const pr = EF.confirm({title: `${l.pl}: final ${l.m}`, ok: 'Save', cancel: 'Cancel', body:
+      `<p>#${b.id} ${esc(b.entry)} · ${l.side === 'over' ? 'Over' : 'Under'} ${l.pt} ${esc(l.m)} (needed ${esc(need)})` +
+      (l.act != null ? `<br>Box score says ${num(l.act)}` : l.lr === 'void' ? '<br>Marked as didn\'t play' : '') + `</p>
+<label class="fld">Final ${esc(l.m)} <input id="fx-v" type="number" inputmode="decimal" step="1" value="${l.act != null ? l.act : ''}"></label>
+<label class="fld chk"><input id="fx-dnp" type="checkbox"${l.lr === 'void' ? ' checked' : ''}> Didn't play (the leg is void)</label>
+<p class="fx-prev" id="fx-prev"></p>
+<p>The leg's result follows from this number, and the bet re-settles.</p>` +
+      (l.lr != null ? '<p><button class="link" id="fx-back">Undo my fix: grade it from the box score again</button></p>' : '')});
+    const prev = () => {
+      const dnp = $('#fx-dnp').checked, v = parseFloat($('#fx-v').value);
+      $('#fx-v').disabled = dnp;
+      $('#fx-prev').textContent = dnp ? 'Void: the leg doesn\'t count.' : isNaN(v) ? ''
+        : Math.abs(v - l.pt) < 1e-9 ? 'That\'s a push.' : ((v > l.pt) === (l.side === 'over') ? '✓ That\'s a hit.' : '✗ That\'s a miss.');
+    };
+    prev(); $('#fx-v').oninput = prev; $('#fx-dnp').onchange = prev;
+    if ($('#fx-back')) $('#fx-back').onclick = () => { back = true; $('#cf-yes').click(); };
+    if (!(await pr)) return;
+    let value;
+    if (back) value = 'clear';
+    else if ($('#fx-dnp').checked) value = 'dnp';
+    else {
+      const v = parseFloat($('#fx-v').value);
+      if (isNaN(v)) { EF.toast('Enter the final number, or tick Didn\'t play.', true); return; }
+      value = String(v);
+    }
+    const sent = await EF.send(`actual ${bid} ${n} ${value}`, 'fix', {bet: bid, leg: n, value});
+    if (sent) EF.toast(value === 'clear' ? 'Going back to the box score.' : 'Fix saved. Results update in a couple of minutes.');
     render(); return;
   }
   const ed = e.target.closest('[data-edit]');
@@ -899,7 +955,7 @@ let resized; window.addEventListener('resize', () => { clearTimeout(resized); re
 
 // While a save is waiting to be recorded, check for fresh data every 30 seconds.
 setInterval(async () => {
-  if (!EF.pending().some(p => ['bet', 'result', 'edit', 'delete', 'restore'].includes(p.kind))) return;
+  if (!EF.pending().some(p => ['bet', 'result', 'edit', 'fix', 'delete', 'restore'].includes(p.kind))) return;
   try {
     const r = await fetch('bets-data.json?t=' + Date.now(), {cache: 'no-store'});
     if (r.ok) { const nd = await r.json(); if (nd.gen !== D.gen) { D = nd; render(); } }

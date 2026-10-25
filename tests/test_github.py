@@ -517,3 +517,60 @@ class PriceCheck(unittest.TestCase):
         self.assertEqual(cmd[:6], ["bet-line", "nba", "--event", "ev1", "--player", "alpha one"])
         with self.assertRaises(SystemExit):
             log_line_bet(self.con, CFG, "nba", "ev1", "nobody", "player_points", "over", 23.5, stake=2, contracts=3)
+
+
+class FixStats(unittest.TestCase):
+    def setUp(self):
+        self.con = connect(os.path.join(tempfile.mkdtemp(), "f.db"))
+        t0 = utcnow() + timedelta(hours=3)
+        ev, od, ka = nba_fixture(t0)
+        automod.run_league(self.con, ACFG, "nba", "K", now=t0 - timedelta(minutes=55), fetch=FakeAPI(ev, od, ka), log=lambda *a: None)
+        self.b = boardmod.build(self.con, CFG, "nba", now=t0 - timedelta(minutes=50))
+        boardmod.save_codes(self.con, self.b)
+
+    def bet(self, picks, **kw):
+        return betlog.log_bet(self.con, CFG, "nba", [x["code"] for x in picks], board_ts=self.b["built_at"], **kw)[0]
+
+    def row(self, bid):
+        return self.con.execute("SELECT * FROM bets WHERE id=?", (bid,)).fetchone()
+
+    def test_fix_a_straight_bet(self):
+        from ef.grade import set_actual
+        fl = [x for x in self.b["fliff"] if x["side"] == "over"][0]           # Alpha One over 24.5
+        bid = self.bet([fl], stake=3)
+        self.con.execute("UPDATE bet_legs SET actual=20, leg_result='miss' WHERE bet_id=?", (bid,))
+        betlog.set_result(self.con, CFG, bid, "loss")
+        msg = set_actual(self.con, CFG, bid, 1, "27")
+        self.assertIn("27 (hit)", msg)
+        r = self.row(bid)
+        self.assertEqual((r["result"], r["graded_by"]), ("win", "fixed"))
+        self.assertAlmostEqual(r["payout"], 3 * 2.10)
+        set_actual(self.con, CFG, bid, 1, "dnp")                              # straight bet: a void is a push
+        self.assertEqual((self.row(bid)["result"], self.row(bid)["payout"]), ("push", 3.0))
+        msg = set_actual(self.con, CFG, bid, 1, "clear")
+        self.assertIn("next run grades it", msg)
+        self.assertIsNone(self.row(bid)["result"])
+        leg = self.con.execute("SELECT * FROM bet_legs WHERE bet_id=?", (bid,)).fetchone()
+        self.assertEqual((leg["actual"], leg["leg_result"]), (None, None))
+
+    def test_review_leg_and_pickem(self):
+        from ef.grade import set_actual
+        cur = self.con.execute("INSERT INTO bets (placed_at, league, book, entry_type, stake) VALUES (?,?,?,?,?)",
+                               ("2026-10-25T10:00:00Z", "nba", "prizepicks", "pp2", 2.0))
+        bid = cur.lastrowid
+        for n, (pl, pt, res, act) in enumerate([("Alpha One", 24.5, "review", None), ("Delta Four", 5.5, "hit", 7)], 1):
+            self.con.execute("INSERT INTO bet_legs (bet_id, leg, event_id, market, player, player_key, side, point, fair_p,"
+                             " actual, leg_result) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                             (bid, n, "ev%d" % n, "player_points", pl, pl.lower(), "over", pt, 0.55, act, res))
+        self.con.commit()
+        msg = set_actual(self.con, CFG, bid, 1, "30")
+        self.assertIn("Bet settled: win", msg)
+        self.assertEqual(self.row(bid)["payout"], 6.0)                        # PP Power 2 pays 3x
+        set_actual(self.con, CFG, bid, 1, "20")
+        self.assertEqual((self.row(bid)["result"], self.row(bid)["payout"]), ("loss", 0.0))
+        msg = set_actual(self.con, CFG, bid, 1, "dnp")                        # pick'em with a void: yours to settle
+        self.assertIn("set its result", msg)
+        self.assertIsNone(self.row(bid)["result"])
+        with self.assertRaises(SystemExit):
+            set_actual(self.con, CFG, bid, 9, "3")
+        self.assertIn("actual", web.ALLOWED)

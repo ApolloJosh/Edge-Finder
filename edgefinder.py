@@ -11,6 +11,7 @@ against the sharp books and flags the few worth betting.
   python3 edgefinder.py watch nba          closing snapshot before each game you bet
   python3 edgefinder.py result 7 win
   python3 edgefinder.py delete 7           take a bet out of your record (restore 7 undoes it)
+  python3 edgefinder.py actual 7 1 64       fix leg 1's final number (or dnp / clear)
   python3 edgefinder.py edit 7 --stake 2 --contracts 4.18   match a bet to what actually filled
   python3 edgefinder.py bets               recent bets
   python3 edgefinder.py clv                closing line value report
@@ -271,6 +272,11 @@ def main(argv=None):
         sp.add_argument("league", choices=["nba", "nfl"])
         sp.add_argument("--minutes", type=int, default=15)
 
+    sp = sub.add_parser("actual", help="fix a player's final number: actual BET LEG 64 | dnp | clear")
+    sp.add_argument("bet_id", type=int)
+    sp.add_argument("leg", type=int)
+    sp.add_argument("value")
+
     sp = sub.add_parser("bet-line", help="a bet on a line priced on the Check page (Robinhood)")
     sp.add_argument("league", choices=["nba", "nfl"])
     sp.add_argument("--event", required=True)
@@ -353,6 +359,8 @@ def main(argv=None):
     elif args.cmd == "result":
         pay = betlog.set_result(con, cfg, args.bet_id, args.outcome, payout=args.payout, hits=args.hits)
         print("Bet #%d: %s, payout $%.2f" % (args.bet_id, args.outcome, pay))
+    elif args.cmd == "actual":
+        print(grademod.set_actual(con, cfg, args.bet_id, args.leg, args.value))
     elif args.cmd == "bet-line":
         from ef.check import log_line_bet
         bid, fair = log_line_bet(con, cfg, args.league, args.event, args.player, args.market, args.side, args.point,
