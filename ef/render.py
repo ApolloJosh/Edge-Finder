@@ -106,6 +106,11 @@ box-shadow:var(--shadow);border-radius:16px 16px 0 0;transform:translateY(110%);
 .stepper button{background:transparent;color:var(--ink);border:0;border-radius:0;min-width:44px;font-size:20px;padding:0}
 .stepper span{min-width:46px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
 .d3{margin-top:8px;font-size:13.5px;color:var(--dim);min-height:19px}
+.kbuy{display:flex;gap:10px;align-items:center}
+.kbuy[hidden],.stepper[hidden]{display:none}
+.kp{display:flex;align-items:center;gap:5px;font-weight:650;color:var(--dim)}
+.kp input{width:64px;min-height:44px;font:inherit;font-size:16px;font-weight:700;text-align:center;border:1px solid var(--line);
+border-radius:10px;background:var(--bg);color:var(--ink)}
 .d4{display:flex;gap:8px;margin-top:10px}
 .d4 .btn,.d4 button{flex:1}
 .cmd{margin-top:8px;font:11.5px ui-monospace,Menlo,monospace;color:var(--faint);overflow-x:auto;white-space:nowrap}
@@ -272,7 +277,9 @@ BODY = """<body>
 <div id="dock" aria-live="polite"><div class="dock-in">
 <div class="d1"><span id="dsum"></span><button class="link" id="clear">Clear</button></div>
 <div class="d2"><select id="entry" aria-label="Entry type"></select>
-<div class="stepper"><button id="minus" aria-label="Less">−</button><span>$<b id="stake">1</b></span><button id="plus" aria-label="More">+</button></div></div>
+<div class="stepper" id="sstep"><button id="minus" aria-label="Less">−</button><span>$<b id="stake">1</b></span><button id="plus" aria-label="More">+</button></div>
+<div class="kbuy" id="kbuy" hidden><div class="stepper"><button id="kminus" aria-label="Fewer contracts">−</button><span><b id="kc">1</b> <small>ct</small></span><button id="kplus" aria-label="More contracts">+</button></div>
+<label class="kp">at <input id="kp" type="number" inputmode="numeric" min="1" max="99" step="1" aria-label="Price per contract in cents">¢</label></div></div>
 <div class="d3" id="dexp"></div>
 <div class="d4">%(primary)s<button class="ghost" id="copy">Copy</button></div>
 <div class="cmd" id="cmd"></div>%(fallback)s
@@ -295,6 +302,12 @@ const LG = D.league.toUpperCase();
 let view = 'flag', app = 'all', sort = 'v';
 const picked = new Map();
 let stake = 1;
+// Kalshi sells whole contracts, so a dollar stake becomes contracts (fee included, never over the stake).
+// One Kalshi pick at a time can be set to exactly what filled: contracts and price.
+let kc = null, kp = null, kkey = '', kn = 1;
+const kFee = (p, n) => Math.ceil(+(0.07 * n * p * (1 - p) * 100).toFixed(6)) / 100;
+const kCost = (p, n) => Math.round((n * p + kFee(p, n)) * 100) / 100;
+const kFit = (s, p) => { let n = Math.max(1, Math.floor(s / p + 1e-9)); while (n > 1 && kCost(p, n) > s + 1e-9) n--; return n; };
 try { stake = Math.max(1, parseInt(localStorage.getItem('ef-stake') || '1', 10) || 1); } catch (e) {}
 
 function ago(iso) {
@@ -461,18 +474,36 @@ function dock(preferEntry) {
     const avg = legs.reduce((s, r) => s + r.v, 0) / legs.length;
     exp = `${legs.length} separate bet${legs.length > 1 ? 's' : ''} · avg ${legs[0].s === 'kalshi' && books.size === 1 ? 'return' : 'value'} <b class="${avg >= 0 ? 'pos' : 'neg'}">${sgn(avg * 100)}%</b>`;
   }
+  const kal = legs.filter(r => r.s === 'kalshi');
+  const single = legs.length === 1 && kal.length === 1;
+  $('#sstep').hidden = single; $('#kbuy').hidden = !single;
+  let kargs = '', cost = null;
+  if (single) {
+    const r = kal[0];
+    if (kkey !== r.c) { kkey = r.c; kc = null; kp = null; }
+    const price = kp != null ? kp / 100 : r.ask;
+    kn = kc != null ? kc : kFit(stake, price);
+    cost = kCost(price, kn);
+    $('#kc').textContent = kn;
+    if (document.activeElement !== $('#kp')) $('#kp').value = Math.round(price * 100);
+    exp = `${kn} contract${kn > 1 ? 's' : ''} · <b>$${cost.toFixed(2)}</b> with fee · pays $${kn.toFixed(2)} if it hits. Match what Kalshi filled.`;
+    kargs = ` --contracts ${kn} --price ${price.toFixed(2)}`;
+  } else if (kal.length) {
+    const list = kal.slice(0, 3).map(r => { const n = kFit(stake, r.ask); return `${esc(r.pl.split(' ').slice(-1)[0])} ${n} ct $${kCost(r.ask, n).toFixed(2)}`; });
+    exp += `<br>Kalshi: ${list.join(' · ')}${kal.length > 3 ? ` · +${kal.length - 3} more` : ''}`;
+  }
   sel.style.display = types && sel.options.length ? '' : 'none';
   $('#dsum').textContent = `${legs.length} pick${legs.length > 1 ? 's' : ''}` + (book ? ' · ' + legs[0].bl : '');
   $('#dexp').innerHTML = msg ? `<span class="neg">${esc(msg)}</span>` : exp;
   args = `bet ${D.league} ${[...picked.keys()].join(' ')}` + (types && sel.value ? ` --entry ${sel.value}` : '') +
-         ` --stake ${stake} --board ${D.built}`;
+         ` --stake ${stake}${kargs} --board ${D.built}`;
   $('#cmd').textContent = D.repo ? args : `cd "${D.root}" && python3 edgefinder.py ${args}`;
   const log = $('#log');
   if (log) log.href = `https://github.com/${D.repo}/issues/new?title=${encodeURIComponent(args)}&body=${encodeURIComponent('```\n' + args + '\n```')}`;
   const save = $('#save');
   if (save) { save.disabled = !!msg; save.textContent = window.EF && EF.token() ? 'Save bet' : 'Save bet (set up once)'; }
   summary = (types && sel.value ? types[sel.value].label : legs.map(r => r.bl).filter((x, i, a) => a.indexOf(x) === i).join(' + ')) +
-            ' · $' + stake + ' · ' + legs.map(r => `${r.pl} ${r.pk} ${r.m}`).join(', ');
+            ' · $' + (cost != null ? cost.toFixed(2) : stake) + ' · ' + legs.map(r => `${r.pl} ${r.pk} ${r.m}`).join(', ');
 }
 let summary = '';
 if ($('#save')) $('#save').onclick = async () => {
@@ -490,6 +521,10 @@ window.addEventListener('ef-auth', () => dock());
 const setStake = v => { stake = Math.max(1, Math.min(100, v)); try { localStorage.setItem('ef-stake', stake); } catch (e) {} dock(); };
 $('#minus').onclick = () => setStake(stake - 1);
 $('#plus').onclick = () => setStake(stake + 1);
+$('#kminus').onclick = () => { kc = Math.max(1, kn - 1); dock(); };
+$('#kplus').onclick = () => { kc = Math.min(500, kn + 1); dock(); };
+$('#kp').oninput = () => { const v = parseInt($('#kp').value, 10); if (v >= 1 && v <= 99) { kp = v; dock(); } };
+$('#kp').onblur = () => dock();
 $('#clear').onclick = () => { picked.clear(); draw(); dock(); };
 $('#copy').onclick = async () => {
   const t = $('#cmd').textContent;

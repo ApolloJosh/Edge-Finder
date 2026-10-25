@@ -36,6 +36,20 @@ def resolve_codes(con, league, codes, board_ts=None):
     return ts, picks
 
 
+def kalshi_cost(ask, n):
+    """What n Kalshi contracts at `ask` cost, taker fee included, in dollars."""
+    return round(n * ask + kalshi_fee(ask, n) * n, 2)
+
+
+def kalshi_contracts(stake, ask):
+    """The most whole contracts `stake` dollars buys, fee included (at least 1).
+    Kalshi only sells whole contracts, so $2 at 45 cents is 4 contracts for $1.87."""
+    n = max(1, int(stake / ask + 1e-9))
+    while n > 1 and kalshi_cost(ask, n) > stake + 1e-9:
+        n -= 1
+    return n
+
+
 def log_bet(con, cfg, league, codes, entry=None, stake=1.0, price=None, contracts=None, notes=None, now=None,
             board_ts=None):
     now = now or utcnow()
@@ -76,11 +90,11 @@ def log_bet(con, cfg, league, codes, entry=None, stake=1.0, price=None, contract
         for p in picks:
             if p["book"] == "kalshi":
                 ask = price if price is not None else p["ask"]
-                n = contracts or max(1, int(round(stake / ask)))
+                n = contracts or kalshi_contracts(stake, ask)
                 fee = kalshi_fee(ask, n)
                 cur = con.execute(
                     "INSERT INTO bets (placed_at, league, book, entry_type, stake, contracts, notes)"
-                    " VALUES (?,?,?,?,?,?,?)", (iso(now), league, "kalshi", "kalshi", round(n * (ask + fee), 2), n, notes))
+                    " VALUES (?,?,?,?,?,?,?)", (iso(now), league, "kalshi", "kalshi", kalshi_cost(ask, n), n, notes))
                 _insert_leg(con, cur.lastrowid, 1, p, price=ask, fair=p["fair_p"], be=ask + fee)
             else:
                 dec = price if price is not None else p["price"]
@@ -220,6 +234,43 @@ def delete_bet(con, bet_id, now=None):
     con.commit()
     return "Deleted bet #%d (%s %s, $%.2f). Restore it with: restore %d" % (
         bet_id, BOOK_LABELS.get(b["book"], b["book"]), b["entry_type"] or "", b["stake"] or 0, bet_id)
+
+
+def edit_bet(con, cfg, bet_id, stake=None, contracts=None, price=None):
+    """Correct a logged bet to match what the app actually filled.
+    Kalshi: contracts and/or price per contract (the cost is worked out, fee included).
+    Others: the stake (and for Fliff the decimal price). A settled bet's payout follows."""
+    b = con.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
+    if not b:
+        raise SystemExit("No bet #%s." % bet_id)
+    legs = con.execute("SELECT * FROM bet_legs WHERE bet_id=? ORDER BY leg", (bet_id,)).fetchall()
+    pay = b["payout"]
+    if b["book"] == "kalshi":
+        n = int(contracts or b["contracts"] or 1)
+        ask = float(price if price is not None else legs[0]["price"])
+        if not (0 < ask < 1) or n < 1:
+            raise SystemExit("Kalshi needs a price between 1 and 99 cents and at least 1 contract.")
+        new = kalshi_cost(ask, n)
+        if b["result"] == "win":
+            pay = float(n)
+        elif b["result"] == "push":
+            pay = new
+        con.execute("UPDATE bets SET contracts=?, stake=?, payout=? WHERE id=?", (n, new, pay, bet_id))
+        con.execute("UPDATE bet_legs SET price=?, breakeven=? WHERE bet_id=?", (ask, ask + kalshi_fee(ask, n), bet_id))
+        con.commit()
+        return "Bet #%d: %d contracts at %d cents, $%.2f with fee." % (bet_id, n, round(ask * 100), new)
+    new = round(float(stake if stake is not None else b["stake"]), 2)
+    if new <= 0:
+        raise SystemExit("The stake has to be more than $0.")
+    if pay is not None and (b["stake"] or 0) > 0:
+        pay = round(pay * new / b["stake"], 2)
+    if price is not None and b["book"] not in cfg.pickem_books:
+        con.execute("UPDATE bet_legs SET price=?, breakeven=? WHERE bet_id=?", (price, 1.0 / price, bet_id))
+        if b["result"] == "win":
+            pay = round(new * price, 2)
+    con.execute("UPDATE bets SET stake=?, payout=? WHERE id=?", (new, pay, bet_id))
+    con.commit()
+    return "Bet #%d: stake $%.2f." % (bet_id, new)
 
 
 def restore_bet(con, bet_id):

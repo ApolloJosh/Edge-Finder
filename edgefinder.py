@@ -11,6 +11,7 @@ against the sharp books and flags the few worth betting.
   python3 edgefinder.py watch nba          closing snapshot before each game you bet
   python3 edgefinder.py result 7 win
   python3 edgefinder.py delete 7           take a bet out of your record (restore 7 undoes it)
+  python3 edgefinder.py edit 7 --contracts 4 --price 0.45   match a bet to what actually filled
   python3 edgefinder.py bets               recent bets
   python3 edgefinder.py clv                closing line value report
 
@@ -265,6 +266,11 @@ def main(argv=None):
     for name in ("delete", "restore"):
         sp = sub.add_parser(name)
         sp.add_argument("bet_id", type=int)
+    sp = sub.add_parser("edit")
+    sp.add_argument("bet_id", type=int)
+    sp.add_argument("--stake", type=float)
+    sp.add_argument("--contracts", type=int, help="Kalshi contracts you actually got")
+    sp.add_argument("--price", type=float, help="Kalshi price per contract (0.45) or Fliff decimal odds")
 
     sp = sub.add_parser("result")
     sp.add_argument("bet_id", type=int)
@@ -331,6 +337,8 @@ def main(argv=None):
         print(betlog.delete_bet(con, args.bet_id))
     elif args.cmd == "restore":
         print(betlog.restore_bet(con, args.bet_id))
+    elif args.cmd == "edit":
+        print(betlog.edit_bet(con, cfg, args.bet_id, stake=args.stake, contracts=args.contracts, price=args.price))
     elif args.cmd == "bets":
         betlog.update_closes(con, cfg)
         print(betlog.list_bets(con))

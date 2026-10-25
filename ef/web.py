@@ -22,7 +22,7 @@ from .util import local, parse_iso, utcnow
 E = html.escape
 
 # Commands an issue may run. Anything else is refused.
-ALLOWED = {"bet", "result", "delete", "restore", "run", "refresh", "ge-import"}
+ALLOWED = {"bet", "result", "edit", "delete", "restore", "run", "refresh", "ge-import"}
 
 
 def parse_issue(title, body):
@@ -414,9 +414,10 @@ def results_payload(con, cfg, repo, now):
             "stake": round(b["stake"] or 0, 2), "res": b["result"],
             "pay": None if b["payout"] is None else round(b["payout"], 2),
             "auto": b["graded_by"] == "auto", "note": b["notes"], "start": min(starts) if starts else None,
-            "could": could,
+            "could": could, "ct": b["contracts"],
             "legs": [dict({"pl": l["player"], "m": market_label(l["market"]), "side": l["side"], "pt": l["point"],
                            "fair": l["fair_p"], "close": l["close_fair_p"], "fl": l["flagged"], "edge": l["edge"],
+                           "price": l["price"],
                            "act": l["actual"], "lr": l["leg_result"], "gp": l["ge_p"], "lg": b["league"]},
                           **closeness(l)) for l in legs],
         })
@@ -456,7 +457,10 @@ line-height:1.35;white-space:nowrap;display:none;z-index:2}
 .mark{font-weight:800;margin-right:4px}
 .mark.hit{color:var(--accent)}.mark.miss{color:var(--bad)}.mark.other{color:var(--faint)}
 .badge.saving,.badge.hook{background:var(--warn-bg);color:var(--warn)}
-.cardfoot{display:flex;justify-content:flex-end;margin-top:6px}
+.cardfoot{display:flex;justify-content:flex-end;gap:14px;margin-top:6px}
+.fld{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:8px 0;font-weight:600;color:var(--ink)}
+.fld input{width:110px;min-height:44px;font:inherit;font-size:16px;font-weight:700;text-align:center;border:1px solid var(--line);
+border-radius:10px;background:var(--bg);color:var(--ink)}
 button.link.del{color:var(--faint);font-size:13px;min-height:36px;padding:6px 2px}
 details.how .drow{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
 details.how .drow:first-of-type{border-top:0}
@@ -672,8 +676,10 @@ function render() {
   const settledIds = new Set(D.bets.filter(b => b.res != null).map(b => b.id));
   const liveIds = new Set(D.bets.map(b => b.id));
   const pend = EF.pending(p => p.kind === 'bet' ? recorded.has('issue #' + p.n) : p.kind === 'result' ? settledIds.has(p.bet)
-    : p.kind === 'delete' ? !liveIds.has(p.bet) : p.kind === 'restore' ? liveIds.has(p.bet) : false);
+    : p.kind === 'delete' ? !liveIds.has(p.bet) : p.kind === 'restore' ? liveIds.has(p.bet)
+    : p.kind === 'edit' ? D.bets.some(b => b.id === p.bet && Math.abs(b.stake - p.stake) < 0.005) || Date.now() - p.ts > 15 * 60e3 : false);
   const deleting = new Set(pend.filter(p => p.kind === 'delete').map(p => p.bet));
+  editing = new Set(pend.filter(p => p.kind === 'edit').map(p => p.bet));
   const restoring = new Set(pend.filter(p => p.kind === 'restore').map(p => p.bet));
   const bets = D.bets.filter(b => !deleting.has(b.id)).filter(inScope);
   const settled = bets.filter(b => b.res != null).sort((a, b) => (a.start || a.placed).localeCompare(b.start || b.placed));
@@ -781,7 +787,12 @@ function betCard(b, savingResult) {
     `<div class="res">${['win', 'loss', 'push'].map(x => `<button class="${x === 'win' ? 'win' : 'ghost'}" data-res="${x}" data-bet="${b.id}">${x[0].toUpperCase() + x.slice(1)}</button>`).join('')}</div>`;
   return `<div class="card bet">${head}${stale ? '<div class="meta"><span class="badge saving">needs your result</span> couldn\'t be graded automatically</div>' : ''}${legs}${btns}${delBtn(b)}</div>`;
 }
-const delBtn = b => `<div class="cardfoot"><button class="link del" data-del="${b.id}">Delete bet</button></div>`;
+const delBtn = b => editing.has(b.id) ? '<div class="cardfoot"><span class="badge saving">saving edit</span></div>'
+  : `<div class="cardfoot"><button class="link del" data-edit="${b.id}">Edit</button><button class="link del" data-del="${b.id}">Delete bet</button></div>`;
+let editing = new Set();
+// Kalshi cost for n contracts at price p, fee included (same rule as the board and the log)
+const kFee = (p, n) => Math.ceil(+(0.07 * n * p * (1 - p) * 100).toFixed(6)) / 100;
+const kCost = (p, n) => Math.round((n * p + kFee(p, n)) * 100) / 100;
 
 document.addEventListener('click', async e => {
   const d = e.target.closest('[data-del]');
@@ -797,6 +808,38 @@ document.addEventListener('click', async e => {
     if (!ok) return;
     const n = await EF.send(`delete ${b.id}`, 'delete', {bet: b.id});
     if (n) EF.toast(`Bet #${b.id} deleted.`);
+    render(); return;
+  }
+  const ed = e.target.closest('[data-edit]');
+  if (ed) {
+    const b = D.bets.find(x => x.id === +ed.dataset.edit);
+    if (!b) return;
+    const k = b.book === 'kalshi', l0 = b.legs[0];
+    const what = `<p><b>${esc(b.entry)}</b> · placed ${esc(when(b.placed))}<br>${b.legs.map(l => esc(`${l.pl} ${l.side === 'over' ? 'Over' : 'Under'} ${l.pt} ${l.m}`)).join('<br>')}</p>`;
+    const body = what + (k
+      ? `<label class="fld">Contracts <input id="ed-c" type="number" inputmode="numeric" min="1" step="1" value="${b.ct || 1}"></label>
+<label class="fld">Price per contract (¢) <input id="ed-p" type="number" inputmode="numeric" min="1" max="99" step="1" value="${Math.round((l0.price || 0.5) * 100)}"></label>
+<p id="ed-sum"></p><p>Use the numbers from your Kalshi order. The cost includes Kalshi's fee.</p>`
+      : `<label class="fld">Stake ($) <input id="ed-s" type="number" inputmode="decimal" min="0.01" step="0.01" value="${b.stake.toFixed(2)}"></label>`);
+    const pr = EF.confirm({title: `Edit bet #${b.id}`, body, ok: 'Save', cancel: 'Cancel'});
+    const sum = () => {
+      const c = parseInt($('#ed-c').value, 10), p = parseInt($('#ed-p').value, 10) / 100;
+      $('#ed-sum').innerHTML = c >= 1 && p > 0 && p < 1 ? `<b>$${kCost(p, c).toFixed(2)}</b> with fee · pays $${c.toFixed(2)} if it hits` : 'Enter contracts and a price from 1 to 99¢';
+    };
+    if (k) { sum(); $('#ed-c').oninput = sum; $('#ed-p').oninput = sum; }
+    if (!(await pr)) return;
+    let args, stake;
+    if (k) {
+      const c = parseInt($('#ed-c').value, 10), p = parseInt($('#ed-p').value, 10) / 100;
+      if (!(c >= 1 && p > 0 && p < 1)) { EF.toast('Contracts must be 1 or more and the price 1 to 99¢.', true); return; }
+      args = `edit ${b.id} --contracts ${c} --price ${p.toFixed(2)}`; stake = kCost(p, c);
+    } else {
+      stake = Math.round(parseFloat($('#ed-s').value) * 100) / 100;
+      if (!(stake > 0)) { EF.toast('The stake has to be more than $0.', true); return; }
+      args = `edit ${b.id} --stake ${stake.toFixed(2)}`;
+    }
+    const n = await EF.send(args, 'edit', {bet: b.id, stake});
+    if (n) EF.toast(`Bet #${b.id} updated. It shows here in a couple of minutes.`);
     render(); return;
   }
   const rs = e.target.closest('[data-restore]');
@@ -829,7 +872,7 @@ let resized; window.addEventListener('resize', () => { clearTimeout(resized); re
 
 // While a save is waiting to be recorded, check for fresh data every 30 seconds.
 setInterval(async () => {
-  if (!EF.pending().some(p => ['bet', 'result', 'delete', 'restore'].includes(p.kind))) return;
+  if (!EF.pending().some(p => ['bet', 'result', 'edit', 'delete', 'restore'].includes(p.kind))) return;
   try {
     const r = await fetch('bets-data.json?t=' + Date.now(), {cache: 'no-store'});
     if (r.ok) { const nd = await r.json(); if (nd.gen !== D.gen) { D = nd; render(); } }

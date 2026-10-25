@@ -404,3 +404,46 @@ class DeleteBets(unittest.TestCase):
             self.assertEqual(data["deleted"], [])
         finally:
             del os.environ["EDGEFINDER_DB"]
+
+
+class KalshiStake(unittest.TestCase):
+    def test_contracts_never_go_over_the_stake(self):
+        from ef.bets import kalshi_contracts, kalshi_cost
+        self.assertEqual((kalshi_contracts(2, 0.45), kalshi_cost(0.45, 4)), (4, 1.87))   # Huntley: $1.80 + 7c fee
+        for ask in (0.05, 0.28, 0.38, 0.42, 0.5, 0.67, 0.9, 0.97):
+            for stake in (1, 2, 3, 5):
+                n = kalshi_contracts(stake, ask)
+                self.assertTrue(n == 1 or kalshi_cost(ask, n) <= stake, (ask, stake, n))
+                self.assertGreater(kalshi_cost(ask, n + 1), stake, (ask, stake, n))
+
+    def test_edit(self):
+        con = connect(os.path.join(tempfile.mkdtemp(), "e.db"))
+        t0 = utcnow() + timedelta(hours=3)
+        ev, od, ka = nba_fixture(t0)
+        automod.run_league(con, ACFG, "nba", "K", now=t0 - timedelta(minutes=55), fetch=FakeAPI(ev, od, ka), log=lambda *a: None)
+        b = boardmod.build(con, CFG, "nba", now=t0 - timedelta(minutes=50))
+        boardmod.save_codes(con, b)
+        k = b["kalshi"][0]
+        bid = betlog.log_bet(con, CFG, "nba", [k["code"]], stake=2, board_ts=b["built_at"])[0]
+        row = con.execute("SELECT * FROM bets WHERE id=?", (bid,)).fetchone()
+        self.assertLessEqual(row["stake"], 2)
+        bid2 = betlog.log_bet(con, CFG, "nba", [k["code"]], stake=2, contracts=4, price=0.45, board_ts=b["built_at"])[0]
+        self.assertEqual(con.execute("SELECT stake, contracts FROM bets WHERE id=?", (bid2,)).fetchone()[:], (1.87, 4))
+
+        msg = betlog.edit_bet(con, CFG, bid2, contracts=5, price=0.40)
+        self.assertIn("5 contracts at 40 cents", msg)
+        r = con.execute("SELECT stake, contracts FROM bets WHERE id=?", (bid2,)).fetchone()
+        self.assertEqual((r["contracts"], r["stake"]), (5, betlog.kalshi_cost(0.40, 5)))
+        self.assertAlmostEqual(con.execute("SELECT price FROM bet_legs WHERE bet_id=?", (bid2,)).fetchone()["price"], 0.40)
+        betlog.set_result(con, CFG, bid2, "win")
+        betlog.edit_bet(con, CFG, bid2, contracts=6)
+        self.assertEqual(con.execute("SELECT payout FROM bets WHERE id=?", (bid2,)).fetchone()["payout"], 6.0)
+
+        fl = [x for x in b["fliff"] if x["side"] == "over"][0]
+        fid = betlog.log_bet(con, CFG, "nba", [fl["code"]], stake=3, board_ts=b["built_at"])[0]
+        betlog.set_result(con, CFG, fid, "win")
+        betlog.edit_bet(con, CFG, fid, stake=2)
+        r = con.execute("SELECT stake, payout FROM bets WHERE id=?", (fid,)).fetchone()
+        self.assertEqual(r["stake"], 2.0)
+        self.assertAlmostEqual(r["payout"], 2 * 2.10)
+        self.assertIn("edit", web.ALLOWED)
