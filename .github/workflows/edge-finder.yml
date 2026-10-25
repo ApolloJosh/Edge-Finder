@@ -1,10 +1,11 @@
 # Edge Finder runs itself here.
 #
-#  * Every 15 minutes (about 10 AM - 1 AM Central): pull any games ~90 and
-#    ~30 min from tip, take closing snapshots for games you bet, run any
-#    command issues, and republish the board if anything changed.
-#  * When you open an issue (the board's Log button does this): the same
-#    pass runs right away, so the bet is logged within a couple of minutes.
+#  * Every 15 minutes: check what a Run would cost (free), take closing
+#    snapshots for games you bet, grade finished bets, run any command
+#    issues, and republish the site if anything changed. Board pulls only
+#    happen when you ask (config.json auto.board_offsets_min is empty).
+#  * When the app opens an issue (Save bet, Run NBA/NFL, a result): the same
+#    pass runs right away, so it lands within a few minutes.
 #  * When you upload a Gridiron Edge export into inputs/ on GitHub: load it
 #    and rebuild the board.
 #  * Actions tab > Edge Finder > Run workflow: run a task by hand.
@@ -24,7 +25,7 @@ on:
         description: What to run
         type: choice
         default: auto
-        options: [auto, refresh-nba, refresh-nfl, gridiron-edge, probe, site-only]
+        options: [auto, run-nba, run-nfl, gridiron-edge, probe, site-only]
   issues:
     types: [opened]
   push:
@@ -86,7 +87,10 @@ jobs:
       - name: Is a Gridiron Edge export due?
         id: ge
         run: |
-          if [ "$TASK" = "gridiron-edge" ]; then echo "ge_due=true" >> "$GITHUB_OUTPUT"; else python edgefinder.py ge-due; fi
+          case "$TASK" in
+            gridiron-edge|run-nfl) echo "ge_due=true" >> "$GITHUB_OUTPUT" ;;
+            *) python edgefinder.py ge-due ;;
+          esac
 
       - name: Check out Gridiron Edge
         if: steps.ge.outputs.ge_due == 'true'
@@ -115,7 +119,7 @@ jobs:
           if [ "$n" = "0" ] && [ "$q" = "0" ]; then gh workflow run ticker.yml -R "$GITHUB_REPOSITORY" && echo "::notice::Restarted the backup ticker"; fi
 
       # ---------- the work ----------
-      - name: Commands from issues (bet / result / refresh)
+      - name: Commands from issues (bet / result / run)
         id: issues
         if: env.TASK == 'auto'
         run: python edgefinder.py sweep-issues
@@ -130,8 +134,8 @@ jobs:
         if: env.TASK != 'auto'
         run: |
           case "$TASK" in
-            refresh-nba) python edgefinder.py pull nba --yes --hours 14 ;;
-            refresh-nfl) python edgefinder.py pull nfl --yes --hours 30 ;;
+            run-nba)     python edgefinder.py pull nba --yes --hours 16 ;;
+            run-nfl)     python edgefinder.py pull nfl --yes --hours 16 ;;
             probe)       python edgefinder.py probe ;;
           esac
           echo "changed=true" >> "$GITHUB_OUTPUT"

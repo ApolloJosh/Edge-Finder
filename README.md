@@ -11,18 +11,25 @@ from your phone with your Mac asleep. It only reads prices. **It never places a 
 
 ## How it runs
 
-Every 15 minutes from about 10 AM to 1 AM Central, a GitHub Actions run:
+**Lines are pulled only when you tap Run NBA or Run NFL on Home**, so credits go only to
+days you bet. Each button shows how many games a run covers (every game in the next 16
+hours), the most it can cost, and when you last ran it. Tap once to see the cost, again to
+run; it warns you if you ran that league in the last 3 hours. The new board lands in about
+3 minutes (4 for NFL, which runs Gridiron Edge first: it opens Gridiron Edge in a headless
+browser, lets it scan, clicks **Export for Edge Finder**, and loads the file).
 
-1. **Pulls each game twice**: about 90 minutes before tip (the day's news) and about 30
-   minutes before (after lineups post). Games are grouped by tip time, so a 6:00 and a
-   9:00 slate each get their own pulls.
+Every 15 minutes, a GitHub Actions run also does the free work:
+
+1. **Checks what a Run would cost** (listing games is free) so the buttons stay current.
 2. **Takes a closing snapshot** about 30 minutes before every game you bet, pulling only the
-   markets you bet. That's what closing line value (CLV) is measured against.
-3. **Runs any commands you sent as issues** (log a bet, record a result, refresh).
-4. **Republishes the site** if anything changed.
+   markets you bet: about 1 credit a game. That's what closing line value (CLV) is measured
+   against. Turn it off with `"closing_snapshots": false` in `config.json`, but then CLV
+   can't be measured.
+3. **Grades finished bets** from ESPN box scores.
+4. **Runs anything the app sent** (a saved bet, a result, a run).
+5. **Republishes the site** if anything changed.
 
-On NFL game days it also opens Gridiron Edge in a headless browser, lets it scan, clicks
-**Export for Edge Finder**, and loads the file, at most every 3 hours.
+To go back to automatic pulls, set `auto.board_offsets_min` to `[90, 30]` (minutes before tip).
 
 The database lives on the repo's `state` branch as a single commit that's replaced each run,
 so the repo doesn't grow. Lines for players you bet are kept for good; everything else is
@@ -48,18 +55,30 @@ pruned after 3 days.
 3. Closing lines are captured before each game, and **results are graded automatically** from ESPN box
    scores once the game is final. A pick'em entry with a voided or pushed leg, or a player the box score
    doesn't list, is left for you: tap Win / Loss / Push on Results.
-4. Lineup news? Home has **Refresh NBA now** / **Refresh NFL now** (costs credits).
+4. Lineup news? Tap Run again (it costs credits again).
 
 **Results** shows your record, profit, closing line value and leg hit rate; a profit-over-time chart and a
 CLV trend; and what's working by app, entry type, stat, flagged-vs-your-own picks, and (NFL) whether
 Gridiron Edge agreed. Filter by 7 days / 30 days / all and by league.
 
+It also shows **how close each leg came**, because a miss by one is a different result from a miss by ten:
+
+- Each leg on a bet card has a bar centered on the line: what it got, what it needed, and how far
+  past or short it finished. A miss by exactly one (one assist, one catch, one yard) is a **hook 🪝**.
+- Lost bets whose only miss was a hook say **🪝 one hook from $X**.
+- **Hooks 🪝** counts them; **Avg finish vs line** is how far past the line your legs finished on
+  average, in standard deviations of each stat, next to what the prices you took expected.
+- **How close your legs landed** is a histogram of every graded leg: misses left of the line, hits right,
+  with a dashed line for where the prices expected them to land. Legs piling up just left of the line are
+  mostly bad luck rather than bad reads. Closeness settles faster than win-loss, but it's still noisy under
+  ~50 legs, and CLV remains the main test.
+
 No key on a device? Save still works through GitHub: the bottom sheet has "or log it on GitHub instead".
 
 Only issues opened by the repo owner run anything, and only these commands:
-`bet`, `result`, `refresh`, `ge-import`. Other issues are left alone.
+`bet`, `result`, `run` (or `refresh`), `ge-import`. Other issues are left alone.
 
-The Actions tab → Edge Finder → **Run workflow** also offers: refresh-nba, refresh-nfl,
+The Actions tab → Edge Finder → **Run workflow** also offers: run-nba, run-nfl,
 gridiron-edge (export now), probe (check every feed answers), site-only.
 
 ## Reading the board
@@ -93,20 +112,22 @@ Props cost 1 credit per market per game; all ten books count as one region.
 
 | | Credits |
 |---|---|
-| NBA night, 8 games × 5 markets × 2 pulls | ~80 |
-| NFL Sunday, 13 games × 7 markets × 2 pulls | ~180 |
+| Run NBA, 8 games × 5 markets | up to 40 |
+| Run NFL, 13 games × 7 markets | up to 91 |
 | Closing snapshot, per game you bet | 1–3 |
 
-The free 500 a month covers about a week of testing. Running every night needs the $30/month
-plan (20,000 credits). Safety rails in `config.json` → `auto`: `daily_credit_cap` (250) and
-`credit_floor` (keeps 40 in reserve for closing snapshots). Fewer pulls: set
-`board_offsets_min` to `[30]`.
+The real cost is often lower: a market only costs when a book lists it for that game. The free
+500 a month covers a handful of runs. Betting most days needs the $30/month plan (20,000
+credits). A run stops before spending anything if fewer credits are left than games to pull.
+With automatic pulls switched on, `config.json` → `auto` also has `daily_credit_cap` and
+`credit_floor`.
 
 ## Settings worth knowing (`config.json`)
 
 - **entries**: payout tables. PrizePicks is from its help center (Oct 2026). **Underdog's are
   placeholders: check the app, fix them, and delete `"verify": true`.**
-- **auto**: schedule offsets, caps, which leagues run.
+- **manual.hours_ahead**: how far ahead a Run looks (16 hours).
+- **auto**: closing snapshots on/off, automatic pull offsets (off), caps, which leagues are checked.
 - **books.sharp**: which books form the fair price, and their weights.
 - **thresholds**: cushion over breakeven, Fliff/Kalshi minimum EV, sharp books required.
 - **max_line_gap**: how far a sharp line may be from a book's line before it's ignored.
@@ -129,8 +150,8 @@ Local runs use their own database (`data/edgefinder.db`), separate from the one 
 
 - **Sleeper** isn't in any reachable feed. Its lines usually track Underdog's.
 - Demons/goblins and Underdog boosted picks are left out (they live in separate markets).
-- Scheduled GitHub runs can start a few minutes late at busy times, so "30 minutes before tip"
-  is approximate. Use Refresh when news breaks.
+- GitHub runs can start a few minutes late at busy times, so a Run or a closing snapshot can
+  land a little later than planned.
 
 ## Files
 

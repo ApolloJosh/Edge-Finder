@@ -121,7 +121,8 @@ def cmd_auto(cfg, con, args):
         key = odds_api_key()
         for lg in (args.league and [args.league]) or cfg["auto"]["leagues"]:
             r = automod.run_league(con, cfg, lg, key, aliases=load_aliases())
-            changed = changed or r["board_pull"] or r["close_pulls"] > 0 or r.get("closed_legs", 0) > 0
+            changed = (changed or r["board_pull"] or r["close_pulls"] > 0 or r.get("closed_legs", 0) > 0
+                       or r.get("status_changed", False))
             notice("%s: %d games ahead, board pull %s, %d closing snapshot(s), %d credits%s" % (
                 lg.upper(), r.get("games_ahead", 0), "yes" if r["board_pull"] else "no", r["close_pulls"],
                 r["credits"], (" (" + r["skipped"] + ")") if r["skipped"] else ""))
@@ -144,9 +145,11 @@ def handle_command(cmd, number=None):
     argv = list(cmd)
     if argv[0] == "bet" and number is not None and "--note" not in argv:
         argv += ["--note", "issue #%d" % number]   # lets the app see the bet has been recorded
-    if argv[0] == "refresh":
+    if argv[0] in ("run", "refresh"):
         lg = argv[1] if len(argv) > 1 else "nba"
-        argv = ["pull", lg, "--yes", "--hours", "14"]
+        ok, text = web.run_cli(main, ["pull", lg, "--yes", "--hours", str(load_config().get("manual", {}).get("hours_ahead", 16))])
+        # Nothing pulled (no games left, out of credits) counts as a failure, so the app stops waiting.
+        return ok and "Pulled " in text, text
     return web.run_cli(main, argv)
 
 
@@ -186,27 +189,21 @@ def cmd_sweep_issues(cfg, con, args):
 
 
 def cmd_ge_due(cfg, con, args):
-    """True when an NFL game starts within 4 hours and Gridiron Edge hasn't been read in 3."""
-    from datetime import timedelta
-    from ef.sources import OddsAPI
-    from ef.util import iso, utcnow
+    """True when you've asked for an NFL run (an open 'run nfl' issue), so the
+    board it builds carries Gridiron Edge's current read."""
+    import json
+    repo = os.environ.get("GITHUB_REPOSITORY") or cfg["github"]["repo"]
+    owner = os.environ.get("GITHUB_REPOSITORY_OWNER") or repo.split("/")[0]
     due = False
-    if has_key():
-        now = utcnow()
-        st, evs = OddsAPI(cfg, odds_api_key()).events(cfg.league("nfl")["sport_key"], now, now + timedelta(hours=4))
-        soon = st == 200 and any(e["commence_time"] > iso(now) for e in (evs or []))
-        last = con.execute("SELECT MAX(imported_at) AS t FROM ge_proj").fetchone()["t"]
-        due = bool(soon and (not last or last < iso(now - timedelta(hours=3))))
-        # At most one attempt an hour, so a failing export doesn't rerun every 15 minutes.
-        slot = "ge:attempt:" + iso(now)[:13]
-        if due and con.execute("SELECT 1 FROM auto_slots WHERE slot=?", (slot,)).fetchone():
-            due = False
-        elif due:
-            con.execute("INSERT INTO auto_slots (slot, ts) VALUES (?,?)", (slot, iso(now)))
-            con.commit()
+    r = _gh("issue", "list", "--repo", repo, "--state", "open", "--author", owner, "--json", "title", "--limit", "30")
+    if r.returncode == 0:
+        for it in json.loads(r.stdout or "[]"):
+            words = (it.get("title") or "").lower().split()
+            if words[:2] in (["run", "nfl"], ["refresh", "nfl"]):
+                due = True
     print("Gridiron Edge export due: %s" % due)
     if due:
-        notice("Gridiron Edge export due - running it")
+        notice("NFL run requested - refreshing Gridiron Edge first")
     gh_output(ge_due="true" if due else "false")
 
 
@@ -335,7 +332,7 @@ def main(argv=None):
     elif args.cmd == "sweep-issues":
         cmd_sweep_issues(cfg, con, args)
     elif args.cmd == "site":
-        web.build_site(con, cfg, args.out, status=args.status)
+        web.build_site(con, cfg, args.out, status_line=args.status)
         print("Site written to %s/" % args.out)
     elif args.cmd == "grade":
         n = grademod.grade_open_bets(con, cfg, aliases=load_aliases())

@@ -179,6 +179,8 @@ def pull_odds(con, cfg, league, key, fetch=http_get, hours=None, yes=False,
         log("No upcoming %s games in the next %d hours." % (league.upper(), hours))
         return None, {"events": 0, "lines": 0}
 
+    if api.remaining is not None and api.remaining < len(upcoming):
+        raise SystemExit("Out of Odds API credits (%s left this month)." % api.remaining)
     cost = estimate_cost(len(upcoming), len(markets), len(books))
     budget = cfg["odds_api"]["budget_per_pull"]
     log("%s: %d games x %d markets -> up to %d Odds API credits." % (league.upper(), len(upcoming), len(markets), cost))

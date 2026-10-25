@@ -109,14 +109,20 @@
   },
 
   "auto": {
-    "_note": "GitHub Actions runs every 15 minutes. Each group of games is pulled at these minutes before tip. Cost per game = markets x number of offsets.",
+    "_note": "GitHub Actions runs every 15 minutes but only pulls lines when you press Run (board_offsets_min is empty). To pull automatically before each tip, set e.g. [90, 30]. closing_snapshots: about 1 credit per game, only for games you bet - turn off with false (CLV then can't be measured).",
     "leagues": ["nba", "nfl"],
-    "board_offsets_min": [90, 30],
+    "board_offsets_min": [],
+    "closing_snapshots": true,
     "min_lead_min": 5,
     "close_window_min": 30,
     "horizon_hours": 14,
     "daily_credit_cap": 350,
     "credit_floor": 40
+  },
+
+  "manual": {
+    "_note": "A Run pulls every game that hasn't started in the next this-many hours.",
+    "hours_ahead": 16
   },
 
   "github": {

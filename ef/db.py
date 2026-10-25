@@ -49,6 +49,15 @@ CREATE INDEX IF NOT EXISTS lines_pull ON lines (pull_id);
 CREATE INDEX IF NOT EXISTS lines_lookup ON lines (league, player_key, market);
 CREATE INDEX IF NOT EXISTS lines_event ON lines (event_id, pull_id);
 
+-- What a "Run" would cost right now, refreshed by every run (the games list is free).
+CREATE TABLE IF NOT EXISTS league_status (
+  league TEXT PRIMARY KEY,
+  checked_at TEXT NOT NULL,
+  games INTEGER,                   -- games not yet started within the run window
+  next_tip TEXT,
+  credits_remaining INTEGER
+);
+
 -- Which scheduled pulls have already happened, so a late or repeated run
 -- never pays for the same slot twice.
 CREATE TABLE IF NOT EXISTS auto_slots (

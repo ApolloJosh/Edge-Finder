@@ -21,6 +21,17 @@ from ef.db import connect  # noqa: E402
 from ef.util import utcnow  # noqa: E402
 
 
+def auto_cfg():
+    """The config with automatic pulls switched on (90 and 30 minutes before tip).
+    The shipped config pulls only when you press Run."""
+    c = load_config()
+    c["auto"]["board_offsets_min"] = [90, 30]
+    return c
+
+
+ACFG = auto_cfg()
+
+
 class Scheduler(unittest.TestCase):
     def setUp(self):
         self.con = connect(os.path.join(tempfile.mkdtemp(), "a.db"))
@@ -29,7 +40,7 @@ class Scheduler(unittest.TestCase):
         self.api = FakeAPI(ev, od, ka)
         self.q = lambda *a, **k: None
 
-    def run_at(self, minutes, cfg=CFG):
+    def run_at(self, minutes, cfg=ACFG):
         return automod.run_league(self.con, cfg, "nba", "K", now=self.t0 + timedelta(minutes=minutes),
                                   fetch=self.api, log=self.q)
 
@@ -59,13 +70,13 @@ class Scheduler(unittest.TestCase):
         self.assertNotIn("ev1", {x["event_id"] for x in b2["pickem"]})
 
     def test_caps(self):
-        cfg = load_config()
+        cfg = auto_cfg()
         cfg["auto"]["daily_credit_cap"] = 1
         r = self.run_at(-55, cfg)
         self.assertFalse(r["board_pull"])
         self.assertIn("daily cap", r["skipped"])
         self.assertFalse(self.run_at(-50)["board_pull"])          # marked done, not retried
-        cfg = load_config()
+        cfg = auto_cfg()
         cfg["auto"]["credit_floor"] = 10000
         self.api.remaining = 50
         r = automod.run_league(self.con, cfg, "nba", "K", now=self.t0 + timedelta(minutes=5), fetch=self.api, log=self.q)
@@ -119,7 +130,7 @@ class Issues(unittest.TestCase):
             t0 = utcnow() + timedelta(hours=3)
             ev, od, ka = nba_fixture(t0)
             api = FakeAPI(ev, od, ka)
-            automod.run_league(con, CFG, "nba", "K", now=t0 - timedelta(minutes=55), fetch=api, log=lambda *a: None)
+            automod.run_league(con, ACFG, "nba", "K", now=t0 - timedelta(minutes=55), fetch=api, log=lambda *a: None)
             b = boardmod.build(con, CFG, "nba", now=t0 - timedelta(minutes=50))
             boardmod.save_codes(con, b)
             fl = [x for x in b["fliff"] if x["side"] == "over"][0]
@@ -173,13 +184,13 @@ class Site(unittest.TestCase):
         t0 = utcnow() + timedelta(hours=3)
         ev, od, ka = nba_fixture(t0)
         api = FakeAPI(ev, od, ka)
-        automod.run_league(con, CFG, "nba", "K", now=t0 - timedelta(minutes=55), fetch=api, log=lambda *a: None)
+        automod.run_league(con, ACFG, "nba", "K", now=t0 - timedelta(minutes=55), fetch=api, log=lambda *a: None)
         b = boardmod.build(con, CFG, "nba", now=t0 - timedelta(minutes=50))
         boardmod.save_codes(con, b)
         betlog.log_bet(con, CFG, "nba", [[x for x in b["fliff"] if x["side"] == "over"][0]["code"]],
                        board_ts=b["built_at"])
         out = os.path.join(tempfile.mkdtemp(), "site")
-        web.build_site(con, CFG, out, now=t0 - timedelta(minutes=50), status="test")
+        web.build_site(con, CFG, out, now=t0 - timedelta(minutes=50), status_line="test")
         names = sorted(os.listdir(out))
         for n in (".nojekyll", "bets.html", "index.html", "nba.html", "nfl.html", "manifest.webmanifest",
                   "apple-touch-icon.png", "icon-192.png", "icon-512.png"):
@@ -197,7 +208,13 @@ class Site(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(out, "bets-data.json")))
         idx = _read(os.path.join(out, "index.html"))
         self.assertIn("1 open", idx)
-        self.assertIn('data-cmd="refresh nba"', idx)
+        self.assertIn('class="runbtn"', idx)
+        self.assertIn("Run NBA", idx)
+        st = json.loads(_read(os.path.join(out, "status.json")))
+        self.assertEqual(st["leagues"]["nba"]["games"], 3)
+        self.assertEqual(st["leagues"]["nba"]["credits"], 3 * len(CFG.league("nba")["markets"]))
+        self.assertIsNotNone(st["leagues"]["nba"]["last_run"])
+        self.assertIsNone(st["leagues"]["nfl"]["last_run"])
         self.assertIn('id="save"', nba)
 
 
@@ -213,3 +230,133 @@ class Workflow(unittest.TestCase):
             wf = f.read()
         self.assertLess(wf.index("- name: Build the site"), wf.index("- name: Save database to the state branch"))
         self.assertLess(wf.index("- name: Save database to the state branch"), wf.index("- name: Package the site"))
+
+
+class ManualRuns(unittest.TestCase):
+    """Lines are pulled only when you press Run; the scheduled pass only
+    notes what a Run would cost and takes closing snapshots for bets."""
+
+    def setUp(self):
+        self.con = connect(os.path.join(tempfile.mkdtemp(), "m.db"))
+        self.t0 = utcnow() + timedelta(hours=3)
+        ev, od, ka = nba_fixture(self.t0)
+        self.api = FakeAPI(ev, od, ka)
+
+    def test_scheduled_pass_never_pulls_boards(self):
+        cfg = load_config()
+        self.assertEqual(cfg["auto"]["board_offsets_min"], [])
+        for m in (-95, -55, -25, 5):
+            r = automod.run_league(self.con, cfg, "nba", "K", now=self.t0 + timedelta(minutes=m),
+                                   fetch=self.api, log=lambda *a: None)
+            self.assertFalse(r["board_pull"])
+            self.assertEqual(r["credits"], 0)
+        self.assertEqual(self.api.remaining, 500)
+        self.assertFalse([u for u in self.api.calls if "/odds" in u])
+
+    def test_status_and_estimate(self):
+        cfg = load_config()
+        r = automod.run_league(self.con, cfg, "nba", "K", now=self.t0 - timedelta(minutes=60), fetch=self.api, log=lambda *a: None)
+        self.assertTrue(r["status_changed"])
+        est = automod.run_estimate(self.con, cfg, "nba")
+        self.assertEqual(est["games"], 3)
+        self.assertEqual(est["credits"], 3 * len(cfg.league("nba")["markets"]))
+        self.assertIsNone(est["last_run"])
+        self.assertEqual(automod.credits_left(self.con), 500)
+        r = automod.run_league(self.con, cfg, "nba", "K", now=self.t0 - timedelta(minutes=45), fetch=self.api, log=lambda *a: None)
+        self.assertFalse(r["status_changed"])                    # same games: no republish needed
+        r = automod.run_league(self.con, cfg, "nba", "K", now=self.t0 + timedelta(minutes=35), fetch=self.api, log=lambda *a: None)
+        self.assertTrue(r["status_changed"])                     # first game started
+        self.assertEqual(automod.run_estimate(self.con, cfg, "nba")["games"], 2)
+
+    def test_closing_snapshots_can_be_switched_off(self):
+        automod.run_league(self.con, ACFG, "nba", "K", now=self.t0 - timedelta(minutes=55), fetch=self.api, log=lambda *a: None)
+        b = boardmod.build(self.con, CFG, "nba", now=self.t0 - timedelta(minutes=50))
+        boardmod.save_codes(self.con, b)
+        betlog.log_bet(self.con, CFG, "nba", [[x for x in b["fliff"] if x["side"] == "over"][0]["code"]], board_ts=b["built_at"])
+        cfg = load_config()
+        cfg["auto"]["closing_snapshots"] = False
+        r = automod.run_league(self.con, cfg, "nba", "K", now=self.t0 + timedelta(minutes=10), fetch=self.api, log=lambda *a: None)
+        self.assertEqual(r["close_pulls"], 0)
+        r = automod.run_league(self.con, load_config(), "nba", "K", now=self.t0 + timedelta(minutes=12), fetch=self.api, log=lambda *a: None)
+        self.assertEqual(r["close_pulls"], 1)
+
+    def test_run_command(self):
+        import edgefinder
+        self.assertIn("run", web.ALLOWED)
+        self.assertEqual(web.parse_issue("run nba", "```\nrun nba\n```"), ["run", "nba"])
+        seen = []
+
+        def fake_pull(con, cfg, league, key, hours=None, yes=False, aliases=None, **k):
+            seen.append((league, hours, yes))
+            print("No upcoming %s games in the next %d hours." % (league.upper(), hours))
+            return None, {"events": 0, "lines": 0}
+
+        real = edgefinder.pull_odds, edgefinder.odds_api_key
+        edgefinder.pull_odds, edgefinder.odds_api_key = fake_pull, lambda: "K"
+        os.environ["EDGEFINDER_DB"] = os.path.join(tempfile.mkdtemp(), "r.db")
+        try:
+            ok, text = edgefinder.handle_command(["run", "nfl"], 5)
+        finally:
+            edgefinder.pull_odds, edgefinder.odds_api_key = real
+            del os.environ["EDGEFINDER_DB"]
+        self.assertEqual(seen, [("nfl", 16, True)])
+        self.assertFalse(ok)                                    # nothing pulled: the app stops waiting
+        self.assertIn("No upcoming NFL games", text)
+        self.assertIn("didn't go through", web.comment_for(["run", "nfl"], ok, text))
+
+    def test_out_of_credits_stops_before_spending(self):
+        from ef.sources import pull_odds
+        self.api.remaining = 2
+        with self.assertRaises(SystemExit) as e:
+            pull_odds(self.con, CFG, "nba", "K", fetch=self.api, hours=16, yes=True, log=lambda *a: None)
+        self.assertIn("Out of Odds API credits", str(e.exception))
+
+    def test_ge_due_follows_run_nfl(self):
+        import edgefinder
+
+        class R:
+            def __init__(self, out):
+                self.returncode, self.stdout, self.stderr = 0, out, ""
+
+        for titles, want in ((["run nba"], "false"), (["bet nfl 3"], "false"), (["run nfl"], "true"), (["Run NFL"], "true")):
+            out = os.path.join(tempfile.mkdtemp(), "out")
+            os.environ["GITHUB_OUTPUT"] = out
+            real = edgefinder._gh
+            edgefinder._gh = lambda *a, stdin=None, t=titles: R(json.dumps([{"title": x} for x in t]))
+            try:
+                edgefinder.cmd_ge_due(CFG, self.con, None)
+            finally:
+                edgefinder._gh = real
+                del os.environ["GITHUB_OUTPUT"]
+            self.assertIn("ge_due=%s" % want, _read(out), titles)
+
+
+class Closeness(unittest.TestCase):
+    def leg(self, side, pt, act, lr, market="player_assists", fair=0.55, price=None):
+        return {"side": side, "point": pt, "actual": act, "leg_result": lr, "market": market, "fair_p": fair, "price": price}
+
+    def test_hooks_and_margins(self):
+        c = web.closeness(self.leg("over", 5.5, 5, "miss"))
+        self.assertEqual((c["need"], c["mg"], c["hook"]), (6, -0.5, True))
+        self.assertGreater(c["sd"], 0)
+        self.assertAlmostEqual(c["ez"], 0.126, places=2)          # a 55% leg should land ~0.13 SD on your side
+        self.assertFalse(web.closeness(self.leg("over", 5.5, 4, "miss"))["hook"])
+        c = web.closeness(self.leg("under", 24.5, 25, "miss", "player_points"))
+        self.assertEqual((c["need"], c["mg"], c["hook"]), (24, -0.5, True))
+        self.assertFalse(web.closeness(self.leg("under", 24.5, 27, "miss", "player_points"))["hook"])
+        self.assertTrue(web.closeness(self.leg("over", 64.5, 64, "miss", "player_reception_yds"))["hook"])
+        c = web.closeness(self.leg("over", 5, 5, "push"))            # whole-number line
+        self.assertEqual((c["need"], c["mg"], c["hook"]), (6, 0, False))
+        c = web.closeness(self.leg("over", 9.5, 11, "hit", "player_points"))
+        self.assertEqual((c["mg"], c["hook"]), (1.5, False))
+        self.assertNotIn("mg", web.closeness(self.leg("over", 9.5, None, None)))
+
+    def test_one_hook_from(self):
+        b = {"book": "prizepicks", "entry_type": "pp4", "stake": 2.0, "contracts": None}
+        legs = [self.leg("over", 5.5, 7, "hit")] * 3 + [self.leg("over", 5.5, 5, "miss")]
+        self.assertEqual(web.payout_if_hit(CFG, b, legs), 20.0)
+        self.assertIsNone(web.payout_if_hit(CFG, b, legs[:2] + [self.leg("over", 5.5, 5, "miss")] * 2))
+        k = {"book": "kalshi", "entry_type": "kalshi", "stake": 2.0, "contracts": 7}
+        self.assertEqual(web.payout_if_hit(CFG, k, [self.leg("over", 5.5, 5, "miss")]), 7)
+        f = {"book": "fliff", "entry_type": "straight", "stake": 2.0, "contracts": None}
+        self.assertEqual(web.payout_if_hit(CFG, f, [self.leg("over", 5.5, 5, "miss", price=2.1)]), 4.2)

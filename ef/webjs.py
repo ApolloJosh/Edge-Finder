@@ -34,7 +34,7 @@ GH_JS = r"""
 window.EF = (function () {
   const REPO = window.EF_REPO;
   const TOKEN_URL = 'https://github.com/settings/personal-access-tokens/new?name=' + encodeURIComponent('Edge Finder app') +
-    '&description=' + encodeURIComponent('Lets the Edge Finder app save bets and results') +
+    '&description=' + encodeURIComponent('Lets the Edge Finder app save bets and start runs') +
     '&target_name=' + encodeURIComponent(REPO.split('/')[0]) + '&expires_in=366&issues=write';
   const store = {
     get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -54,7 +54,7 @@ window.EF = (function () {
   }
   async function send(args, kind, meta) {
     const t = token();
-    if (!t) { openSettings('Connect once, then Save works from here.'); return false; }
+    if (!t) { openSettings('Connect once, then Save and Run work from here.'); return false; }
     let r;
     try {
       r = await fetch(`https://api.github.com/repos/${REPO}/issues`, {
@@ -90,7 +90,7 @@ window.EF = (function () {
     bg = document.createElement('div'); bg.id = 'sheet-bg'; bg.className = 'sheet-bg';
     const s = document.createElement('div'); s.id = 'sheet'; s.className = 'sheet';
     s.innerHTML = `<div class="sheet-in">
-<h3>Save bets from this app</h3>
+<h3>Save bets and run from this app</h3>
 <p id="set-why"></p>
 <div id="set-on" hidden><p class="okline">Connected. Save works on this device.</p>
 <div class="row"><button class="ghost" id="set-test">Check it</button><button class="ghost" id="set-off">Disconnect</button></div></div>

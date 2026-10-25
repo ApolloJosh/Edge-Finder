@@ -3,22 +3,26 @@ import contextlib
 import html
 import io
 import json
+import math
 import os
 import re
 import shlex
 import shutil
+from statistics import NormalDist
 from urllib.parse import quote
 
+from . import auto as automod
 from . import board as boardmod
 from .bets import update_closes
 from . import render
 from .board import BOOK_LABELS, market_label
+from .fair import stat_sigma
 from .util import local, parse_iso, utcnow
 
 E = html.escape
 
 # Commands an issue may run. Anything else is refused.
-ALLOWED = {"bet", "result", "refresh", "ge-import"}
+ALLOWED = {"bet", "result", "run", "refresh", "ge-import"}
 
 
 def parse_issue(title, body):
@@ -73,7 +77,7 @@ details.how{margin-top:16px;background:var(--panel);border:1px solid var(--line)
 details.how summary{font-weight:650;cursor:pointer}
 details.how ol{color:var(--dim);font-size:14px;line-height:1.65;padding-left:20px;margin:8px 0 2px}
 .kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
-@media (min-width:640px){.kpis{grid-template-columns:repeat(4,1fr)}}
+@media (min-width:640px){.kpis{grid-template-columns:repeat(3,1fr)}}
 .kpi{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
 .kpi .k{font-size:12.5px;color:var(--dim);font-weight:600}
 .kpi .v{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}
@@ -98,7 +102,7 @@ el.textContent=m<1?'just now':m<60?m+' min ago':Math.floor(m/60)+'h '+(m%60)+'m 
 
 
 def _page(title, active, content, web, js=""):
-    return (render.head(title, web=True).replace("</style>", EXTRA_CSS + RESULTS_CSS + "</style>") +
+    return (render.head(title, web=True).replace("</style>", EXTRA_CSS + HOME_CSS + RESULTS_CSS + "</style>") +
             '<body><header class="bar"><div class="wrap">%s</div></header><main class="wrap">%s</main>%s%s%s</body></html>' % (
                 render.nav_html(active, web), content, render.ef_script(web["repo"]), AGO_JS, js))
 
@@ -115,15 +119,157 @@ def copy_static(out_dir):
 
 
 HOME_JS = r"""<script>
-document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = async e => {
-  e.preventDefault();
-  const n = await EF.send(b.dataset.cmd, 'refresh', {});
-  if (n) EF.toast('Refresh requested. New lines in about 2 minutes.');
-});
+(function () {
+  const LG = {nba: 'NBA', nfl: 'NFL'};
+  const RECENT_MIN = 180;          // warn before re-running within 3 hours
+  const GIVE_UP_MIN = 25;
+  let st = window.ST;
+  const confirmT = {}, watching = {};
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+  const mins = iso => (Date.now() - Date.parse(iso)) / 60000;
+  function ago(iso) {
+    const m = Math.max(0, Math.round(mins(iso)));
+    return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm ago' : Math.floor(m / 1440) + 'd ago';
+  }
+  function when(iso) {
+    const d = new Date(iso), t = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+    return d.toDateString() === new Date().toDateString() ? t : d.toLocaleDateString([], {weekday: 'short'}) + ' ' + t;
+  }
+  const info = lg => (st && st.leagues && st.leagues[lg]) || {};
+  function landed(p) { const s = info(p.league); return !!(s.last_run && Date.parse(s.last_run) >= p.ts - 20000); }
+  function runs() {
+    return EF.pending(p => p.kind === 'run' && (landed(p) || p.failed || Date.now() - p.ts > GIVE_UP_MIN * 60e3))
+      .filter(p => p.kind === 'run');
+  }
+  const runFor = lg => runs().filter(p => p.league === lg).pop();
+
+  function paint() {
+    for (const lg of Object.keys(LG)) {
+      const card = document.querySelector(`.lgc[data-lg="${lg}"]`);
+      if (!card) continue;
+      const b = card.querySelector('.runbtn'), rl = b.querySelector('.rl'), rs = b.querySelector('.rs'), rm = card.querySelector('.rm');
+      const s = info(lg), p = runFor(lg), left = st && st.credits_left;
+      const recent = s.last_run && mins(s.last_run) < RECENT_MIN;
+      b.className = 'runbtn'; b.disabled = false;
+      if (watching[lg] && !p) {                       // a run just finished (or gave up)
+        const w = watching[lg]; delete watching[lg];
+        if (landed(w)) EF.toast(`${LG[lg]} board is ready.`);
+        else if (!w.failed) EF.toast(`Didn't hear back about the ${LG[lg]} run. Check GitHub's Actions tab.`, true);
+      }
+      if (p) {
+        watching[lg] = p;
+        b.classList.add('busy'); b.disabled = true;
+        rl.innerHTML = '<span class="spin" aria-hidden="true"></span>Running';
+        rs.textContent = `Started ${ago(new Date(p.ts).toISOString())} · new board in about ${lg === 'nfl' ? 4 : 3} min`;
+      } else if (confirmT[lg]) {
+        b.classList.add('confirm');
+        rl.textContent = 'Tap again to run';
+        rs.textContent = recent ? `You ran ${LG[lg]} ${ago(s.last_run)}. Up to ${s.credits} more credits.`
+          : `Spends up to ${s.credits ?? '?'}${left != null ? ' of your ' + left : ''} credits`;
+      } else if (s.games === 0) {
+        b.disabled = true;
+        rl.textContent = 'Run ' + LG[lg];
+        rs.textContent = `No games in the next ${st.hours} hours`;
+      } else {
+        rl.textContent = 'Run ' + LG[lg];
+        rs.textContent = s.games == null ? 'Cost shows after the next check'
+          : `${s.games} game${s.games === 1 ? '' : 's'} · up to ${s.credits} credits` + (left != null && s.credits > left ? ` · only ${left} left` : '');
+      }
+      const last = s.last_run ? `Last run <b class="${recent ? 'recent' : ''}">${esc(ago(s.last_run))}</b>` +
+        (s.last_games != null ? ` · ${s.last_games} game${s.last_games === 1 ? '' : 's'}` : '') +
+        (s.last_credits != null ? ` · ${s.last_credits} credits` : '') : 'Not run yet';
+      const fail = p ? '' : (EF.store.get('ef-run-fail', {})[lg] || '');
+      rm.innerHTML = last + (s.games && s.next_tip ? `<br>Next ${lg === 'nfl' ? 'kickoff' : 'tip'} ${esc(when(s.next_tip))}` : '') +
+        (fail ? `<br><span class="failed">Last try didn't go through: ${esc(fail)}</span>` : '');
+    }
+    const c = document.getElementById('cred');
+    if (c && st && st.credits_left != null) c.textContent = ` · ${st.credits_left} Odds API credits left`;
+  }
+
+  async function refresh() {
+    try {
+      const r = await fetch('status.json?t=' + Date.now(), {cache: 'no-store'});
+      if (r.ok) st = await r.json();
+    } catch (e) {}
+    for (const p of runs()) if (Date.now() - p.ts > 60e3) await checkIssue(p);
+    paint();
+  }
+
+  // A run that failed on GitHub (no games, out of credits) says so in its issue.
+  async function checkIssue(p) {
+    const t = EF.token();
+    if (!t || !p.n) return;
+    const h = {Authorization: 'Bearer ' + t, Accept: 'application/vnd.github+json'};
+    try {
+      const r = await fetch(`https://api.github.com/repos/${window.EF_REPO}/issues/${p.n}`, {headers: h});
+      if (!r.ok || (await r.json()).state !== 'closed') return;
+      const c = await fetch(`https://api.github.com/repos/${window.EF_REPO}/issues/${p.n}/comments?per_page=10`, {headers: h});
+      const list = c.ok ? await c.json() : [];
+      const body = (list[list.length - 1] || {}).body || '';
+      if (!body.startsWith("That didn't go through")) return;
+      const out = (body.split('```')[1] || '').trim().split('\n').filter(Boolean);
+      const msg = (out[out.length - 1] || 'see the issue on GitHub').slice(0, 180);
+      const all = EF.store.get('ef-pending', []);
+      all.forEach(x => { if (x.n === p.n) x.failed = msg; });
+      EF.store.set('ef-pending', all);
+      const f = EF.store.get('ef-run-fail', {}); f[p.league] = msg; EF.store.set('ef-run-fail', f);
+      EF.toast(`${LG[p.league]} run didn't go through: ${msg}`, true);
+    } catch (e) {}
+  }
+
+  document.querySelectorAll('.lgc').forEach(card => {
+    const lg = card.dataset.lg, b = card.querySelector('.runbtn');
+    b.onclick = async () => {
+      if (runFor(lg)) return;
+      if (!confirmT[lg]) {                             // first tap arms it
+        confirmT[lg] = setTimeout(() => { delete confirmT[lg]; paint(); }, 5000);
+        paint(); return;
+      }
+      clearTimeout(confirmT[lg]); delete confirmT[lg];
+      b.disabled = true;
+      const n = await EF.send('run ' + lg, 'run', {league: lg, summary: 'Run ' + LG[lg]});
+      if (n) {
+        const f = EF.store.get('ef-run-fail', {}); delete f[lg]; EF.store.set('ef-run-fail', f);
+        EF.toast(`${LG[lg]} run started. The new board lands in a few minutes.`);
+      }
+      paint();
+    };
+  });
+
+  paint();
+  refresh();
+  setInterval(() => { if (runs().length) refresh(); else paint(); }, 15000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  window.addEventListener('ef-auth', paint);
+})();
 </script>"""
 
+HOME_CSS = """
+.runs{display:grid;grid-template-columns:1fr;gap:12px;margin-top:14px}
+@media (min-width:640px){.runs{grid-template-columns:1fr 1fr}}
+.lgc{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px}
+.lgh{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px}
+.lgh h2{margin:0;font-size:20px}
+.lgh a{font-size:14px;font-weight:650;text-decoration:none;white-space:nowrap}
+.lgh a.none{color:var(--faint);pointer-events:none}
+button.runbtn{width:100%;min-height:78px;flex-direction:column;gap:4px;border-radius:14px;padding:12px 14px}
+.runbtn .rl{font-size:21px;font-weight:800;line-height:1.15;display:inline-flex;align-items:center}
+.runbtn .rs{font-size:13.5px;font-weight:600;opacity:.92;line-height:1.3}
+button.runbtn.confirm{background:var(--warn-bg);border-color:var(--warn);color:var(--warn)}
+button.runbtn.busy{background:var(--chip);border-color:var(--line);color:var(--ink);opacity:1;cursor:default}
+button.runbtn:disabled:not(.busy){opacity:.45;cursor:default}
+.rm{font-size:13.5px;color:var(--dim);margin-top:10px;line-height:1.55}
+.rm .recent{color:var(--warn)}
+.rm .failed{color:var(--bad)}
+.spin{width:15px;height:15px;border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;
+animation:ef-spin .8s linear infinite;margin-right:8px;flex:none}
+@keyframes ef-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+a.tile.res{margin-top:12px}
+"""
 
-def build_site(con, cfg, out_dir, now=None, status=None):
+
+def build_site(con, cfg, out_dir, now=None, status_line=None):
     """Write index.html, nba.html, nfl.html, bets.html and bets-data.json into out_dir."""
     now = now or utcnow()
     repo = cfg["github"]["repo"]
@@ -131,7 +277,9 @@ def build_site(con, cfg, out_dir, now=None, status=None):
     os.makedirs(out_dir, exist_ok=True)
     copy_static(out_dir)
     update_closes(con, cfg, now)
-    offsets = " and ".join(str(o) for o in cfg["auto"]["board_offsets_min"])
+    hours = cfg.get("manual", {}).get("hours_ahead", 16)
+    status = {"gen": iso_now(now), "hours": hours, "credits_left": automod.credits_left(con),
+              "leagues": {lg: automod.run_estimate(con, cfg, lg) for lg in ("nba", "nfl")}}
     tiles = []
     for lg in ("nba", "nfl"):
         try:
@@ -140,14 +288,14 @@ def build_site(con, cfg, out_dir, now=None, status=None):
             b = None
         if b is None:
             page = _page("Edge Finder " + lg.upper(), lg,
-                         '<h1>Edge Finder · %s</h1><div class="empty">No %s lines pulled yet. Each game is pulled about '
-                         '%s minutes before tip.</div>' % (lg.upper(), lg.upper(), offsets), web)
-            tiles.append((lg, "—", "No board yet"))
+                         '<h1>Edge Finder · %s</h1><div class="empty">No %s lines pulled yet. Tap <a href="index.html">'
+                         'Run %s</a> on Home when you are ready to bet.</div>' % (lg.upper(), lg.upper(), lg.upper()), web)
+            tiles.append((lg, None, 0))
         else:
             boardmod.save_codes(con, b)
             page = render.render(b, cfg, "", web=web)
             fl = sum(1 for s in ("pickem", "fliff", "kalshi") for x in b[s] if x["flagged"])
-            tiles.append((lg, "%d flagged" % fl, '%d games · pulled <span data-ago="%s"></span>' % (b["games"], E(b["pull"]["ts"]))))
+            tiles.append((lg, b["pull"]["ts"], fl))
         with open(os.path.join(out_dir, "%s.html" % lg), "w") as f:
             f.write(page)
 
@@ -161,35 +309,35 @@ def build_site(con, cfg, out_dir, now=None, status=None):
     net = sum((b["pay"] or 0) - (b["stake"] or 0) for b in settled)
     open_n = sum(1 for b in data["bets"] if not b["res"])
     res_txt = ("%s%.2f net · %d settled" % ("+" if net >= 0 else "−", abs(net), len(settled))) if settled else "No settled bets yet"
-    last = con.execute("SELECT * FROM pulls ORDER BY id DESC LIMIT 1").fetchone()
-    credits = last["credits_remaining"] if last and last["credits_remaining"] is not None else None
-    tile_html = "".join('<a class="tile" href="%s.html"><div class="k">%s</div><div class="v">%s</div><div class="s">%s</div></a>' % (
-        lg, lg.upper(), E(v), sub) for lg, v, sub in tiles)
-    tile_html += ('<a class="tile" href="bets.html"><div class="k">Results</div><div class="v">%d open</div>'
-                  '<div class="s">%s</div></a>' % (open_n, E(res_txt)))
+    credits = status["credits_left"]
+    cards = ""
+    for lg, pulled, fl in tiles:
+        link = ('<a href="%s.html">%d flagged · board ›</a>' % (lg, fl)) if pulled else '<a class="none">No board yet</a>'
+        cards += ('<section class="lgc" data-lg="%s"><div class="lgh"><h2>%s</h2>%s</div>'
+                  '<button class="runbtn" type="button"><span class="rl">Run %s</span><span class="rs"></span></button>'
+                  '<div class="rm"></div></section>' % (lg, lg.upper(), link, lg.upper()))
     content = """<h1>Edge Finder</h1>
-<div class="sub">Updated <span data-ago="%(upd)s"></span>%(cred)s</div>
-<div class="tiles">%(tiles)s</div>
-<div class="actions">
-<button class="ghost" data-cmd="refresh nba">Refresh NBA now</button>
-<button class="ghost" data-cmd="refresh nfl">Refresh NFL now</button>
-</div>
-<div class="sub" style="margin-top:6px">Use these when lineup news breaks. Each refresh costs Odds API credits.</div>
+<div class="sub">Updated <span data-ago="%(upd)s"></span><span id="cred">%(cred)s</span></div>
+<div class="runs">%(cards)s</div>
+<a class="tile res" href="bets.html"><div class="k">Results</div><div class="v">%(open)d open</div><div class="s">%(res)s</div></a>
 <details class="how"><summary>How it works</summary><ol>
-<li>Every 15 minutes, GitHub pulls each game about %(off)s minutes before tip and prices every line against the sharp books.</li>
+<li>Lines are only pulled when you tap <b>Run</b>, so credits go only to days you bet. A run prices every game in the next %(hours)d hours against the sharp books. Tap once to see the cost, again to run.</li>
 <li>Open a board, tap the picks you actually play, then <b>Save bet</b>. The first time, Settings walks you through a one-time key.</li>
-<li>Closing lines are saved before each game you bet, and results are graded from ESPN box scores after the game.</li>
-<li><a href="bets.html">Results</a> shows your record, profit over time, closing line value, and what's working by app, stat and entry.</li>
-<li>On NFL game days it runs Gridiron Edge itself and shows its read on each pick.</li>
+<li>For games you bet, it saves the closing line just before the start (about 1 credit a game) and grades results from ESPN box scores after.</li>
+<li><a href="bets.html">Results</a> shows your record, profit, closing line value, how close your misses were, and what's working by app, stat and entry.</li>
+<li>Run NFL also runs Gridiron Edge first and shows its read on each pick.</li>
 <li>Add to your Home Screen: Share → <b>Add to Home Screen</b>. It opens full screen like an app.</li>
 </ol></details>
 <div class="foot">%(status)s</div>""" % {
-        "upd": E(iso_now(now)),
+        "upd": E(iso_now(now)), "cards": cards, "hours": hours, "open": open_n, "res": E(res_txt),
         "cred": (" · %s Odds API credits left" % credits) if credits is not None else "",
-        "tiles": tile_html, "off": offsets, "status": E(status or ""),
+        "status": E(status_line or ""),
     }
+    js = "<script>window.ST = %s;</script>%s" % (json.dumps(status, separators=(",", ":")), HOME_JS)
     with open(os.path.join(out_dir, "index.html"), "w") as f:
-        f.write(_page("Edge Finder", "index", content, web, HOME_JS))
+        f.write(_page("Edge Finder", "index", content, web, js))
+    with open(os.path.join(out_dir, "status.json"), "w") as f:
+        json.dump(status, f, separators=(",", ":"))
     with open(os.path.join(out_dir, ".nojekyll"), "w") as f:
         f.write("")
     return out_dir
@@ -200,6 +348,51 @@ def iso_now(now):
 
 
 # ------------------------------------------------------------------ results page
+
+_ND = NormalDist()
+
+
+def closeness(leg):
+    """How near a leg came, from your side of the line.
+
+    mg   margin past the line (positive = on your side): act - pt for an over, pt - act for an under
+    sd   the stat's standard deviation at that line (same model the pricing uses)
+    ez   the margin the fair price expected, in SDs (a 55% leg is expected to land about 0.13 SD on your side)
+    need the number you needed: an over needs `need` or more, an under `need` or fewer
+    hook missed by one (one assist, one catch, one yard)
+    """
+    if leg["point"] is None or not leg["market"]:
+        return {}
+    pt = float(leg["point"])
+    out = {"sd": round(stat_sigma(leg["market"], pt), 3)}
+    p = leg["fair_p"]
+    if p is not None and 0.001 < p < 0.999:
+        out["ez"] = round(_ND.inv_cdf(p), 3)
+    out["need"] = math.floor(pt) + 1 if leg["side"] == "over" else math.ceil(pt) - 1
+    act = leg["actual"]
+    if act is not None and leg["leg_result"] in ("hit", "miss", "push"):
+        if leg["side"] == "over":
+            mg, short = act - pt, out["need"] - act
+        else:
+            mg, short = pt - act, act - out["need"]
+        out["mg"] = round(mg, 2)
+        out["hook"] = leg["leg_result"] == "miss" and 0 < short <= 1
+    return out
+
+
+def payout_if_hit(cfg, b, legs):
+    """What a lost bet would have paid had its one miss hit. None when that
+    isn't the situation (or can't be worked out)."""
+    res = [l["leg_result"] for l in legs]
+    if res.count("miss") != 1 or any(r not in ("hit", "miss") for r in res):
+        return None
+    if b["book"] in cfg.pickem_books:
+        e = cfg.entries(b["book"]).get(b["entry_type"] or "")
+        return None if not e else round((b["stake"] or 0) * float(e["pays"].get(str(len(legs)), 0)), 2)
+    if b["book"] == "kalshi":
+        return round(b["contracts"] or 0, 2)
+    return round((b["stake"] or 0) * (legs[0]["price"] or 0), 2)
+
 
 def results_payload(con, cfg, repo, now):
     bets = []
@@ -212,15 +405,20 @@ def results_payload(con, cfg, repo, now):
         else:
             entry = "%s · straight" % BOOK_LABELS.get(b["book"], b["book"])
         starts = [l["commence_time"] for l in legs if l["commence_time"]]
+        could = None
+        if b["result"] is not None and (b["payout"] or 0) < (b["stake"] or 0):
+            could = payout_if_hit(cfg, b, legs)
         bets.append({
             "id": b["id"], "placed": b["placed_at"], "lg": b["league"], "book": b["book"],
             "bl": BOOK_LABELS.get(b["book"], b["book"]), "entry": entry, "et": b["entry_type"],
             "stake": round(b["stake"] or 0, 2), "res": b["result"],
             "pay": None if b["payout"] is None else round(b["payout"], 2),
             "auto": b["graded_by"] == "auto", "note": b["notes"], "start": min(starts) if starts else None,
-            "legs": [{"pl": l["player"], "m": market_label(l["market"]), "side": l["side"], "pt": l["point"],
-                      "fair": l["fair_p"], "close": l["close_fair_p"], "fl": l["flagged"], "edge": l["edge"],
-                      "act": l["actual"], "lr": l["leg_result"], "gp": l["ge_p"], "lg": b["league"]} for l in legs],
+            "could": could,
+            "legs": [dict({"pl": l["player"], "m": market_label(l["market"]), "side": l["side"], "pt": l["point"],
+                           "fair": l["fair_p"], "close": l["close_fair_p"], "fl": l["flagged"], "edge": l["edge"],
+                           "act": l["actual"], "lr": l["leg_result"], "gp": l["ge_p"], "lg": b["league"]},
+                          **closeness(l)) for l in legs],
         })
     g = cfg["gridiron_edge"]
     return {"repo": repo, "gen": iso_now(now), "bets": bets, "geAgree": g["agree_at"], "geConflict": g["conflict_at"]}
@@ -256,7 +454,16 @@ line-height:1.35;white-space:nowrap;display:none;z-index:2}
 .legs2 li:first-child{border-top:0}
 .mark{font-weight:800;margin-right:4px}
 .mark.hit{color:var(--accent)}.mark.miss{color:var(--bad)}.mark.other{color:var(--faint)}
-.badge.saving{background:var(--warn-bg);color:var(--warn)}
+.badge.saving,.badge.hook{background:var(--warn-bg);color:var(--warn)}
+.cl{display:flex;align-items:center;gap:9px;margin-top:5px;font-size:12.5px;color:var(--dim)}
+.cl-tr{position:relative;flex:0 0 88px;height:8px;background:var(--chip);border-radius:4px}
+.cl-tr i{position:absolute;display:block}
+.cl-mid{left:50%;top:-3px;bottom:-3px;width:2px;margin-left:-1px;background:var(--base);border-radius:1px}
+.cl-f{top:0;bottom:0}.cl-f.pos{background:var(--s-pos);border-radius:0 4px 4px 0}.cl-f.neg{background:var(--s-neg);border-radius:4px 0 0 4px}
+.cl-d{top:50%;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;border:2px solid var(--panel)}
+.cl-d.pos{background:var(--s-pos)}.cl-d.neg{background:var(--s-neg)}.cl-d.push{background:var(--faint)}
+.chart.hist svg{height:214px}
+.takeaway{font-size:13.5px;color:var(--dim);margin:8px 2px 0}
 """
 
 RESULTS_JS = r"""<script>
@@ -279,6 +486,97 @@ function inScope(b) {
   return Date.now() - Date.parse(b.placed) <= (+range) * 864e5;
 }
 function geTag(p) { return p == null ? 'no read' : p >= D.geAgree ? 'agrees' : p <= D.geConflict ? 'disagrees' : 'neutral'; }
+
+// ---------- closeness: how far each leg finished from the line, in SDs of that stat
+const NEAR = 0.25;                       // a miss within a quarter SD counts as a near miss
+function Phi(x) {
+  if (x === Infinity) return 1;
+  if (x === -Infinity) return 0;
+  const t = 1 / (1 + 0.2316419 * Math.abs(x)), d = 0.3989423 * Math.exp(-x * x / 2);
+  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return x > 0 ? 1 - p : p;
+}
+const zOf = l => l.mg / l.sd;
+const num = x => (Math.round(x * 10) / 10).toString();
+const legName = l => `${l.pl} ${l.side === 'over' ? 'O' : 'U'} ${l.pt} ${l.m}`;
+function closeText(l) {
+  const need = l.side === 'over' ? `${num(l.need)}+` : `${num(l.need)} or fewer`;
+  let note;
+  if (l.lr === 'push') note = 'push';
+  else if (l.lr === 'hit') { const spare = l.side === 'over' ? l.act - l.need : l.need - l.act; note = spare > 0 ? `${num(spare)} to spare` : 'exactly enough'; }
+  else if (l.hook) note = '🪝 missed by one';
+  else note = l.side === 'over' ? `short by ${num(l.need - l.act)}` : `${num(l.act - l.need)} too many`;
+  return `got ${num(l.act)} · needed ${need} · ${note}`;
+}
+function legClose(l) {
+  if (l.mg == null || !l.sd) return l.act != null ? `<div class="cl">got ${esc(num(l.act))}</div>` : '';
+  const z = Math.max(-2, Math.min(2, zOf(l))), pos = 50 + 25 * z;
+  const cls = l.lr === 'hit' ? 'pos' : l.lr === 'miss' ? 'neg' : 'push';
+  const fill = cls === 'push' ? '' : z >= 0 ? `<i class="cl-f pos" style="left:50%;width:${(pos - 50).toFixed(1)}%"></i>`
+    : `<i class="cl-f neg" style="left:${pos.toFixed(1)}%;width:${(50 - pos).toFixed(1)}%"></i>`;
+  return `<div class="cl"><div class="cl-tr" aria-hidden="true"><i class="cl-mid"></i>${fill}<i class="cl-d ${cls}" style="left:${pos.toFixed(1)}%"></i></div><span>${esc(closeText(l))}</span></div>`;
+}
+function closeCall(b) {                  // a lost bet whose one miss was a hook or a near miss
+  if (b.could == null) return '';
+  const m = b.legs.find(l => l.lr === 'miss');
+  if (!m || m.mg == null) return '';
+  if (m.hook) return `<span class="badge hook">🪝 one hook from $${b.could.toFixed(2)}</span>`;
+  if (zOf(m) >= -NEAR) return `<span class="badge hook">one near miss from $${b.could.toFixed(2)}</span>`;
+  return '';
+}
+
+// Histogram of where legs finished, with the spread the prices expected drawn over it.
+function histChart(el, legs) {
+  const svg = el.querySelector('svg'), tip = el.querySelector('.tip');
+  const W = el.clientWidth - 24, H = 214, L = 28, R = 8, T = 40, B = 24;
+  const lo = -2, w = 0.25, n = 16;
+  const bins = Array.from({length: n}, (_, i) => ({a: lo + i * w, b: lo + (i + 1) * w, legs: [], exp: 0}));
+  for (const l of legs) {
+    bins[Math.max(0, Math.min(n - 1, Math.floor((zOf(l) - lo) / w + 1e-9)))].legs.push(l);
+    if (l.ez == null) continue;
+    bins.forEach((x, i) => { x.exp += Phi((i === n - 1 ? Infinity : x.b) - l.ez) - Phi((i === 0 ? -Infinity : x.a) - l.ez); });
+  }
+  const top = Math.max(2, Math.ceil(Math.max(...bins.map(x => Math.max(x.legs.length, x.exp)))));
+  const ticks = niceTicks(0, top), y1 = ticks[ticks.length - 1];
+  const X = z => L + (z - lo) / (n * w) * (W - L - R);
+  const Y = v => T + (H - T - B) * (1 - v / y1);
+  const bw = X(lo + w) - X(lo);
+  let g = ticks.map(t => `<line x1="${L}" x2="${W - R}" y1="${Y(t)}" y2="${Y(t)}" stroke="var(${t === 0 ? '--base' : '--grid'})" stroke-width="1"/>
+<text x="${L - 6}" y="${Y(t) + 4}" text-anchor="end" font-size="11" fill="var(--faint)">${t}</text>`).join('');
+  g += bins.map((x, i) => {
+    const c = x.legs.length, hooks = x.legs.filter(l => l.hook).length;
+    const bar = c ? `<rect class="bar" data-i="${i}" x="${(X(x.a) + 1).toFixed(1)}" y="${Y(c).toFixed(1)}" width="${Math.max(1, bw - 2).toFixed(1)}" height="${(Y(0) - Y(c)).toFixed(1)}" rx="2" fill="var(${x.a < 0 ? '--s-neg' : '--s-pos'})"/>` : '';
+    return bar + (hooks ? `<text x="${(X(x.a) + bw / 2).toFixed(1)}" y="${(Y(c) - 5).toFixed(1)}" text-anchor="middle" font-size="11.5" font-weight="650" fill="var(--ink)">🪝${hooks > 1 ? hooks : ''}</text>` : '');
+  }).join('');
+  if (legs.some(l => l.ez != null)) {
+    const d = bins.map((x, i) => `${i ? 'L' : 'M'}${X(x.a).toFixed(1)},${Y(x.exp).toFixed(1)}L${X(x.b).toFixed(1)},${Y(x.exp).toFixed(1)}`).join('');
+    g += `<path d="${d}" fill="none" stroke="var(--faint)" stroke-width="2" stroke-dasharray="4 3" stroke-linejoin="round"/>`;
+  }
+  g += `<line x1="${X(0)}" x2="${X(0)}" y1="4" y2="${H - B}" stroke="var(--ink)" stroke-width="1.5" opacity=".55"/>
+<text x="${X(0) - 7}" y="13" text-anchor="end" font-size="11.5" font-weight="650" fill="var(--s-neg)">← missed</text>
+<text x="${X(0) + 7}" y="13" font-size="11.5" font-weight="650" fill="var(--s-pos)">hit →</text>
+${[-2, -1, 0, 1, 2].map(z => `<text x="${X(z) + (z === -2 ? 2 : z === 2 ? -2 : 0)}" y="${H - 6}" text-anchor="${z === -2 ? 'start' : z === 2 ? 'end' : 'middle'}" font-size="11" fill="var(--faint)">${z === 0 ? 'line' : (z > 0 ? '+' : '−') + Math.abs(z) + (Math.abs(z) === 2 ? ' SD' : '')}</text>`).join('')}
+<rect x="${L}" y="0" width="${W - L - R}" height="${H}" fill="transparent" class="hit"/>`;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.innerHTML = g;
+  const hit = svg.querySelector('.hit');
+  const show = ev => {
+    const r = svg.getBoundingClientRect(), x = (ev.clientX - r.left) * W / r.width;
+    const i = Math.max(0, Math.min(n - 1, Math.floor((x - L) / bw)));
+    const bn = bins[i], c = bn.legs.length, hooks = bn.legs.filter(l => l.hook).length;
+    svg.querySelectorAll('.bar').forEach(el2 => el2.setAttribute('opacity', +el2.dataset.i === i ? 1 : 0.4));
+    const span = bn.a < 0 ? (i === 0 ? 'Missed by 1.75+ SD' : `Missed by ${-bn.b}–${-bn.a} SD`)
+      : (i === n - 1 ? 'Cleared by 1.75+ SD' : `Cleared by ${bn.a}–${bn.b} SD`);
+    tip.innerHTML = `<b>${c} leg${c === 1 ? '' : 's'}</b> · ${span}` + (hooks ? `<br>🪝 ${hooks} missed by one` : '') +
+      `<br>prices expected ${bn.exp.toFixed(1)}` + bn.legs.slice(0, 3).map(l => `<br>${esc(legName(l))}: ${esc(num(l.act))}`).join('') +
+      (c > 3 ? `<br>+${c - 3} more` : '');
+    tip.style.display = 'block';
+    const px = (X(bn.a) + bw / 2) * r.width / W, maxX = el.clientWidth - tip.offsetWidth - 6;
+    tip.style.left = Math.max(6, Math.min(px + 12 - tip.offsetWidth / 2, maxX)) + 'px'; tip.style.top = (r.top - el.getBoundingClientRect().top + 22) + 'px';
+  };
+  const hide = () => { tip.style.display = 'none'; svg.querySelectorAll('.bar').forEach(el2 => el2.setAttribute('opacity', 1)); };
+  hit.addEventListener('pointermove', show); hit.addEventListener('pointerdown', show); hit.addEventListener('pointerleave', hide);
+}
 
 // ---------- charts (single series, one axis, hairline grid, crosshair tooltip)
 function niceTicks(lo, hi) {
@@ -369,14 +667,32 @@ function render() {
   const clvLegs = bets.flatMap(b => b.legs).filter(l => l.close != null && l.fair != null);
   const clv = clvLegs.length ? clvLegs.reduce((s, l) => s + l.close - l.fair, 0) / clvLegs.length : null;
   const graded = settled.flatMap(b => b.legs.map(l => Object.assign({book: b.bl}, l))).filter(l => l.lr === 'hit' || l.lr === 'miss');
+  const landed = graded.filter(l => l.mg != null && l.sd);
+  const hooks = landed.filter(l => l.hook).length;
+  const hookBets = settled.filter(b => closeCall(b).includes('🪝'));
+  const avgZ = landed.length ? landed.reduce((s, l) => s + zOf(l), 0) / landed.length : null;
+  const withE = landed.filter(l => l.ez != null);
+  const expZ = withE.length ? withE.reduce((s, l) => s + l.ez, 0) / withE.length : null;
+  const gotZ = withE.length ? withE.reduce((s, l) => s + zOf(l), 0) / withE.length : null;
   let h = `<div class="kpis">
 <div class="kpi"><div class="k">Record</div><div class="v">${settled.length ? rec.join('-') : '—'}</div><div class="s">won-lost-push · ${settled.length} settled</div></div>
 <div class="kpi"><div class="k">Profit</div><div class="v ${net >= 0 ? 'pos' : 'neg'}">${settled.length ? money(net) : '—'}</div><div class="s">${settled.length ? sgn(100 * net / staked) + '% on $' + staked.toFixed(0) + ' staked' : 'nothing settled yet'}</div></div>
 <div class="kpi"><div class="k">Closing line value</div><div class="v ${clv != null && clv >= 0 ? 'pos' : clv != null ? 'neg' : ''}">${clv == null ? '—' : sgn(100 * clv)}</div><div class="s">${clv == null ? 'fills in at tip-off' : 'pts per leg · ' + clvLegs.length + ' legs'}</div></div>
-<div class="kpi"><div class="k">Legs hit</div><div class="v">${graded.length ? pct(graded.filter(l => l.lr === 'hit').length / graded.length) : '—'}</div><div class="s">${graded.length ? 'vs ' + pct(graded.reduce((s, l) => s + l.fair, 0) / graded.length) + ' expected · ' + graded.length + ' legs' : 'graded after each game'}</div></div></div>`;
+<div class="kpi"><div class="k">Legs hit</div><div class="v">${graded.length ? pct(graded.filter(l => l.lr === 'hit').length / graded.length) : '—'}</div><div class="s">${graded.length ? 'vs ' + pct(graded.reduce((s, l) => s + l.fair, 0) / graded.length) + ' expected · ' + graded.length + ' legs' : 'graded after each game'}</div></div>
+<div class="kpi"><div class="k">Hooks 🪝</div><div class="v">${landed.length ? hooks : '—'}</div><div class="s">${!landed.length ? 'legs missed by one' : hookBets.length ? hookBets.length + ' bet' + (hookBets.length === 1 ? '' : 's') + ' one hook from cashing' : 'legs missed by one'}</div></div>
+<div class="kpi"><div class="k">Avg finish vs line</div><div class="v ${avgZ == null ? '' : avgZ >= 0 ? 'pos' : 'neg'}">${avgZ == null ? '—' : sgn(avgZ, 2) + ' SD'}</div><div class="s">${expZ == null ? 'how close legs land' : 'prices expected ' + sgn(expZ, 2)}</div></div></div>`;
   if (settled.length >= 2) h += chartBox('c-pl', 'Profit over time', 'Running total after each settled bet');
   else h += `<div class="empty" style="margin-top:10px">Your profit chart starts after two settled bets. Results are graded from ESPN box scores after each game.</div>`;
   if (clvLegs.length >= 2) h += chartBox('c-clv', 'Closing line value', `Average over your last ${Math.min(20, clvLegs.length)} legs, in percentage points. Above zero means the market moved your way`);
+  if (landed.length >= 3) {
+    h += `<h2>How close your legs landed <small>${landed.length} graded legs</small></h2>` +
+      `<div class="chart viz hist" id="c-hist"><div class="st">How far each leg finished from its line, in standard deviations of that stat (1 SD is about ${esc(sdHint(landed))}). Dashed: where the prices you took expected them to land.</div><svg role="img" aria-label="How close your legs landed"></svg><div class="tip"></div></div>`;
+    if (gotZ != null) {
+      const diff = gotZ - expZ;
+      h += `<div class="takeaway">Your legs finished <b class="${diff >= 0 ? 'pos' : 'neg'}">${Math.abs(diff).toFixed(2)} SD ${diff >= 0 ? 'further on your side' : 'short of'}</b> ${diff >= 0 ? 'than' : 'where'} the prices expected${hooks ? `, with ${hooks} hook${hooks === 1 ? '' : 's'}` : ''}.` +
+        `${withE.length < 50 ? ' Still a small sample: closeness steadies faster than win-loss, but give it 50+ legs.' : ''}</div>`;
+    }
+  }
   h += barGroup('What\'s working: by app', byBets(settled, b => b.bl), v => sgn(100 * v) + '%', 'return on money staked');
   h += barGroup('By entry type', byBets(settled, b => b.book === 'kalshi' ? 'Kalshi contracts' : b.et === 'straight' ? b.bl + ' straight' : b.entry), v => sgn(100 * v) + '%');
   h += barGroup('Flagged picks vs your own', byBets(settled, b => b.legs.every(l => l.fl) ? 'Only flagged picks' : 'Includes your own picks'), v => sgn(100 * v) + '%', 'did sticking to the board pay?');
@@ -388,7 +704,7 @@ function render() {
   // lists
   const recorded = new Set(D.bets.map(b => b.note).filter(Boolean));
   const settledIds = new Set(D.bets.filter(b => b.res != null).map(b => b.id));
-  const pend = EF.pending(p => p.kind === 'bet' ? recorded.has('issue #' + p.n) : p.kind === 'result' ? settledIds.has(p.bet) : Date.now() - p.ts > 15 * 60e3);
+  const pend = EF.pending(p => p.kind === 'bet' ? recorded.has('issue #' + p.n) : p.kind === 'result' ? settledIds.has(p.bet) : false);
   const pendBets = pend.filter(p => p.kind === 'bet');
   if (pendBets.length) h += '<h2>Recording</h2><div class="grid">' + pendBets.map(p => `<div class="card bet"><div class="row1"><b>${esc(p.summary || p.args)}</b><span class="badge saving">saving</span></div>
 <div class="meta">Saved ${esc(when(new Date(p.ts).toISOString()))}. It shows here once the next run records it, usually within 2 minutes.</div></div>`).join('') + '</div>';
@@ -414,21 +730,31 @@ function render() {
     lineChart($('#c-clv'), pts, v => (v > 0 ? '+' : '') + v.toFixed(1),
       p => `<b>${sgn(p.y)} pts</b> avg of ${p.n} legs<br>${esc(p.l.pl)} ${p.l.side === 'over' ? 'Over' : 'Under'} ${p.l.pt} ${esc(p.l.m)}<br>${esc(p.label)}`);
   }
+  if ($('#c-hist')) histChart($('#c-hist'), landed);
+}
+
+// "1 SD is about 2 assists or 6 points" - the two stats you bet most, so the unit means something.
+function sdHint(legs) {
+  const m = new Map();
+  for (const l of legs) { const e = m.get(l.m) || {n: 0, sd: 0}; e.n++; e.sd += l.sd; m.set(l.m, e); }
+  return [...m].sort((a, b) => b[1].n - a[1].n).slice(0, 2)
+    .map(([k, e]) => `${num(e.sd / e.n)} ${k.toLowerCase()}`).join(' or ');
 }
 
 function betCard(b, savingResult) {
   const o = outcome(b);
   const head = `<div class="row1"><b>#${b.id} ${esc(b.entry)}</b><span class="big">$${b.stake.toFixed(2)}</span></div>
 <div class="meta">${esc(b.lg.toUpperCase())} · placed ${esc(when(b.placed))}${b.start ? ' · starts ' + esc(when(b.start)) : ''}</div>`;
-  const legs = '<ul class="legs2">' + b.legs.map(l => {
+  const legs = '<ul class="legs2 viz">' + b.legs.map(l => {
     const mk = l.lr === 'hit' ? '<span class="mark hit">✓</span>' : l.lr === 'miss' ? '<span class="mark miss">✗</span>' : l.lr ? `<span class="mark other">${esc(l.lr)}</span>` : '';
-    const act = l.act != null ? ` · got ${l.act}` : '';
     const clv = l.close != null ? ` · close ${pct(l.close, 1)} <b class="${l.close >= l.fair ? 'pos' : 'neg'}">${sgn(100 * (l.close - l.fair))}</b>` : '';
-    return `<li>${mk}<b>${esc(l.pl)}</b> ${l.side === 'over' ? 'Over' : 'Under'} ${l.pt} ${esc(l.m)}<div class="meta">fair ${pct(l.fair, 1)}${clv}${act}</div></li>`;
+    return `<li>${mk}<b>${esc(l.pl)}</b> ${l.side === 'over' ? 'Over' : 'Under'} ${l.pt} ${esc(l.m)}<div class="meta">fair ${pct(l.fair, 1)}${clv}</div>${legClose(l)}</li>`;
   }).join('') + '</ul>';
   if (b.res != null) {
     const cls = o === 'W' ? 'win' : o === 'L' ? 'loss' : '';
-    return `<div class="card bet">${head}<div class="meta"><span class="badge ${cls}">${esc(b.res)} · $${(b.pay || 0).toFixed(2)}</span>${b.auto ? ' graded from the box score' : ''}</div>${legs}</div>`;
+    const g = b.legs.filter(l => l.lr === 'hit' || l.lr === 'miss'), hitN = g.filter(l => l.lr === 'hit').length;
+    const tally = b.legs.length > 1 && g.length ? ` · ${hitN} of ${b.legs.length} hit` : '';
+    return `<div class="card bet">${head}<div class="meta"><span class="badge ${cls}">${esc(b.res)} · $${(b.pay || 0).toFixed(2)}</span>${tally}${b.auto ? ' · graded from the box score' : ''}</div>${closeCall(b) ? `<div class="meta" style="margin-top:6px">${closeCall(b)}</div>` : ''}${legs}</div>`;
   }
   const stale = b.start && Date.now() - Date.parse(b.start) > 5 * 3600e3;
   const btns = savingResult ? `<div class="meta" style="margin-top:10px"><span class="badge saving">saving ${esc(savingResult)}</span></div>` :
@@ -459,7 +785,7 @@ let resized; window.addEventListener('resize', () => { clearTimeout(resized); re
 
 // While a save is waiting to be recorded, check for fresh data every 30 seconds.
 setInterval(async () => {
-  if (!EF.pending().length) return;
+  if (!EF.pending().some(p => p.kind === 'bet' || p.kind === 'result')) return;
   try {
     const r = await fetch('bets-data.json?t=' + Date.now(), {cache: 'no-store'});
     if (r.ok) { const nd = await r.json(); if (nd.gen !== D.gen) { D = nd; render(); } }

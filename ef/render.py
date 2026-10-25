@@ -363,7 +363,7 @@ function card(r) {
 }
 
 const EMPTY = {
-  pickem: `Nothing clears the bar yet. Pick'em edges tend to show up around lineup news; each game is re-pulled about ${D.offsets[D.offsets.length - 1]} min before tip.`,
+  pickem: "Nothing clears the bar yet. Pick'em edges tend to show up after lineup news, so a fresh Run from Home is worth it when news breaks.",
   fliff: 'Nothing beats the sharp market by enough right now.',
   kalshi: 'Nothing clears the bar with enough on offer right now.',
 };

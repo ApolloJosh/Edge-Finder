@@ -1,11 +1,13 @@
 """Unattended runs (GitHub Actions calls this every 15 minutes).
 
-Each run decides what is due:
-  * a board pull for any group of games whose tip is `offset` minutes away
-    (default 90 and 30: once with the day's news, once after lineups post)
-  * a closing snapshot for games you bet that start within `close_window`
-and does nothing otherwise. Slots are recorded, so a late or repeated run
-never pays for the same pull twice. A daily credit cap and a floor on the
+Board pulls are manual by default (the Run buttons): `board_offsets_min` is
+empty. Each unattended run still:
+  * notes how many games a Run would pull and what it would cost (free call)
+  * takes a closing snapshot for games you bet that start within
+    `close_window` - about 1 credit per game, only for games you bet
+and, if `board_offsets_min` is set, pulls games that many minutes before
+tip. Slots are recorded, so a late or repeated run never pays for the same
+pull twice. A daily credit cap and a floor on the
 month's remaining credits keep it from draining the plan.
 """
 from collections import defaultdict
@@ -65,13 +67,15 @@ def run_league(con, cfg, league, key, now=None, fetch=http_get, log=print, alias
     out = {"league": league, "board_pull": False, "close_pulls": 0, "credits": 0, "skipped": None}
 
     api = OddsAPI(cfg, key, fetch)
-    st, evs = api.events(lg["sport_key"], now, now + timedelta(hours=a["horizon_hours"]))
+    window = cfg.get("manual", {}).get("hours_ahead", 16)
+    st, evs = api.events(lg["sport_key"], now, now + timedelta(hours=max(a["horizon_hours"], window)))
     if st != 200 or not isinstance(evs, list):
         out["skipped"] = "couldn't list games (HTTP %s)" % st
         log("%s: %s" % (league.upper(), out["skipped"]))
         return out
     upcoming = [e for e in evs if e["commence_time"] > iso(now)]
     remaining = api.remaining
+    out["status_changed"] = record_status(con, league, upcoming, now, window, remaining)
 
     # 1. board pulls
     due = due_board_slots(con, cfg, league, upcoming, now)
@@ -100,7 +104,7 @@ def run_league(con, cfg, league, key, now=None, fetch=http_get, log=print, alias
                 _mark(con, slot, now)
 
     # 2. closing snapshots for games you bet
-    legs = betlog.legs_needing_close(con, league, now, a["close_window_min"])
+    legs = betlog.legs_needing_close(con, league, now, a["close_window_min"]) if a.get("closing_snapshots", True) else []
     by_event = defaultdict(set)
     for l in legs:
         if not _slot_done(con, "%s:close:%s" % (league, l["event_id"])):
@@ -118,6 +122,44 @@ def run_league(con, cfg, league, key, now=None, fetch=http_get, log=print, alias
     out["closed_legs"] = betlog.update_closes(con, cfg, now)
     out["games_ahead"] = len(upcoming)
     return out
+
+
+def record_status(con, league, upcoming, now, window_hours, remaining):
+    """Store what a Run would pull right now. True when the game count changed
+    (so the Home page's cost estimate gets republished)."""
+    cutoff = iso(now + timedelta(hours=window_hours))
+    games = [e for e in upcoming if e["commence_time"] <= cutoff]
+    nxt = min((e["commence_time"] for e in games), default=None)
+    old = con.execute("SELECT games FROM league_status WHERE league=?", (league,)).fetchone()
+    con.execute("INSERT OR REPLACE INTO league_status (league, checked_at, games, next_tip, credits_remaining)"
+                " VALUES (?,?,?,?,?)", (league, iso(now), len(games), nxt, remaining))
+    con.commit()
+    return old is None or old["games"] != len(games)
+
+
+def run_estimate(con, cfg, league):
+    """{games, credits, next_tip, last_run...} for the Run buttons."""
+    lg = cfg.league(league)
+    st = con.execute("SELECT * FROM league_status WHERE league=?", (league,)).fetchone()
+    regions = max(1, -(-len(cfg.all_books()) // 10))
+    games = st["games"] if st else None
+    last = con.execute("SELECT * FROM pulls WHERE league=? AND kind='board' ORDER BY id DESC LIMIT 1", (league,)).fetchone()
+    return {
+        "games": games, "credits": None if games is None else games * len(lg["markets"]) * regions,
+        "markets": len(lg["markets"]), "next_tip": st["next_tip"] if st else None,
+        "checked": st["checked_at"] if st else None,
+        "last_run": last["ts"] if last else None, "last_games": last["events"] if last else None,
+        "last_credits": last["credits_used"] if last else None,
+    }
+
+
+def credits_left(con):
+    """The newest 'credits remaining' The Odds API reported, from a pull or a games check."""
+    seen = [(r["ts"], r["n"]) for r in con.execute(
+        "SELECT ts, credits_remaining AS n FROM pulls WHERE credits_remaining IS NOT NULL ORDER BY id DESC LIMIT 1")]
+    seen += [(r["ts"], r["n"]) for r in con.execute(
+        "SELECT checked_at AS ts, credits_remaining AS n FROM league_status WHERE credits_remaining IS NOT NULL")]
+    return max(seen)[1] if seen else None
 
 
 def prune(con, keep_days=3, now=None):
