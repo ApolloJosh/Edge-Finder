@@ -22,7 +22,7 @@ from .util import local, parse_iso, utcnow
 E = html.escape
 
 # Commands an issue may run. Anything else is refused.
-ALLOWED = {"bet", "result", "run", "refresh", "ge-import"}
+ALLOWED = {"bet", "result", "delete", "restore", "run", "refresh", "ge-import"}
 
 
 def parse_issue(title, body):
@@ -395,7 +395,7 @@ def payout_if_hit(cfg, b, legs):
 
 
 def results_payload(con, cfg, repo, now):
-    bets = []
+    bets, deleted = [], []
     for b in con.execute("SELECT * FROM bets ORDER BY placed_at, id").fetchall():
         legs = con.execute("SELECT * FROM bet_legs WHERE bet_id=? ORDER BY leg", (b["id"],)).fetchall()
         if b["book"] in cfg.pickem_books:
@@ -408,7 +408,7 @@ def results_payload(con, cfg, repo, now):
         could = None
         if b["result"] is not None and (b["payout"] or 0) < (b["stake"] or 0):
             could = payout_if_hit(cfg, b, legs)
-        bets.append({
+        (deleted if b["deleted_at"] else bets).append({
             "id": b["id"], "placed": b["placed_at"], "lg": b["league"], "book": b["book"],
             "bl": BOOK_LABELS.get(b["book"], b["book"]), "entry": entry, "et": b["entry_type"],
             "stake": round(b["stake"] or 0, 2), "res": b["result"],
@@ -421,7 +421,8 @@ def results_payload(con, cfg, repo, now):
                           **closeness(l)) for l in legs],
         })
     g = cfg["gridiron_edge"]
-    return {"repo": repo, "gen": iso_now(now), "bets": bets, "geAgree": g["agree_at"], "geConflict": g["conflict_at"]}
+    return {"repo": repo, "gen": iso_now(now), "bets": bets, "deleted": deleted,
+            "geAgree": g["agree_at"], "geConflict": g["conflict_at"]}
 
 
 RESULTS_CSS = """
@@ -455,6 +456,12 @@ line-height:1.35;white-space:nowrap;display:none;z-index:2}
 .mark{font-weight:800;margin-right:4px}
 .mark.hit{color:var(--accent)}.mark.miss{color:var(--bad)}.mark.other{color:var(--faint)}
 .badge.saving,.badge.hook{background:var(--warn-bg);color:var(--warn)}
+.cardfoot{display:flex;justify-content:flex-end;margin-top:6px}
+button.link.del{color:var(--faint);font-size:13px;min-height:36px;padding:6px 2px}
+details.how .drow{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+details.how .drow:first-of-type{border-top:0}
+details.how .drow .meta{font-size:12.5px}
+details.how .drow button{flex:none;min-height:38px}
 .cl{display:flex;align-items:center;gap:9px;margin-top:5px;font-size:12.5px;color:var(--dim)}
 .cl-tr{position:relative;flex:0 0 88px;height:8px;background:var(--chip);border-radius:4px}
 .cl-tr i{position:absolute;display:block}
@@ -660,7 +667,15 @@ function byLegs(legs, keyFn) {
 
 // ---------- page
 function render() {
-  const bets = D.bets.filter(inScope);
+  const all = D.bets.concat(D.deleted || []);
+  const recorded = new Set(all.map(b => b.note).filter(Boolean));
+  const settledIds = new Set(D.bets.filter(b => b.res != null).map(b => b.id));
+  const liveIds = new Set(D.bets.map(b => b.id));
+  const pend = EF.pending(p => p.kind === 'bet' ? recorded.has('issue #' + p.n) : p.kind === 'result' ? settledIds.has(p.bet)
+    : p.kind === 'delete' ? !liveIds.has(p.bet) : p.kind === 'restore' ? liveIds.has(p.bet) : false);
+  const deleting = new Set(pend.filter(p => p.kind === 'delete').map(p => p.bet));
+  const restoring = new Set(pend.filter(p => p.kind === 'restore').map(p => p.bet));
+  const bets = D.bets.filter(b => !deleting.has(b.id)).filter(inScope);
   const settled = bets.filter(b => b.res != null).sort((a, b) => (a.start || a.placed).localeCompare(b.start || b.placed));
   const staked = settled.reduce((s, b) => s + b.stake, 0), net = settled.reduce((s, b) => s + (b.pay || 0) - b.stake, 0);
   const rec = ['W', 'L', 'P'].map(o => settled.filter(b => outcome(b) === o).length);
@@ -702,9 +717,6 @@ function render() {
   if (settled.length && settled.length < 100) h += `<div class="sub" style="margin-top:10px">Under 100 bets, records swing on luck. Closing line value is the earlier signal.</div>`;
 
   // lists
-  const recorded = new Set(D.bets.map(b => b.note).filter(Boolean));
-  const settledIds = new Set(D.bets.filter(b => b.res != null).map(b => b.id));
-  const pend = EF.pending(p => p.kind === 'bet' ? recorded.has('issue #' + p.n) : p.kind === 'result' ? settledIds.has(p.bet) : false);
   const pendBets = pend.filter(p => p.kind === 'bet');
   if (pendBets.length) h += '<h2>Recording</h2><div class="grid">' + pendBets.map(p => `<div class="card bet"><div class="row1"><b>${esc(p.summary || p.args)}</b><span class="badge saving">saving</span></div>
 <div class="meta">Saved ${esc(when(new Date(p.ts).toISOString()))}. It shows here once the next run records it, usually within 2 minutes.</div></div>`).join('') + '</div>';
@@ -714,6 +726,12 @@ function render() {
   h += open.length ? '<div class="grid">' + open.map(b => betCard(b, pendRes.get(b.id))).join('') + '</div>' : '<div class="empty">No open bets.</div>';
   const done = bets.filter(b => b.res != null).sort((a, b) => (b.start || b.placed).localeCompare(a.start || a.placed)).slice(0, 60);
   h += '<h2>Settled</h2>' + (done.length ? '<div class="grid">' + done.map(b => betCard(b)).join('') + '</div>' : '<div class="empty">Nothing settled yet.</div>');
+  const gone = D.bets.filter(b => deleting.has(b.id)).concat(D.deleted || []);
+  if (gone.length) h += `<details class="how"><summary>Deleted bets (${gone.length})</summary>` + gone.map(b => {
+    const state = deleting.has(b.id) ? '<span class="badge saving">deleting</span>' : restoring.has(b.id) ? '<span class="badge saving">restoring</span>'
+      : `<button class="ghost" data-restore="${b.id}">Restore</button>`;
+    return `<div class="drow"><div><b>#${b.id} ${esc(b.entry)}</b> · $${b.stake.toFixed(2)}<div class="meta">${esc(legLine(b))}</div></div>${state}</div>`;
+  }).join('') + '<div class="meta" style="margin-top:6px">Deleted bets are left out of your record, charts and stats.</div></details>';
   $('#res').innerHTML = h;
 
   if (settled.length >= 2) {
@@ -732,6 +750,8 @@ function render() {
   }
   if ($('#c-hist')) histChart($('#c-hist'), landed);
 }
+
+const legLine = b => b.legs.map(l => `${l.pl} ${l.side === 'over' ? 'O' : 'U'} ${l.pt} ${l.m}`).join(', ');
 
 // "1 SD is about 2 assists or 6 points" - the two stats you bet most, so the unit means something.
 function sdHint(legs) {
@@ -754,15 +774,39 @@ function betCard(b, savingResult) {
     const cls = o === 'W' ? 'win' : o === 'L' ? 'loss' : '';
     const g = b.legs.filter(l => l.lr === 'hit' || l.lr === 'miss'), hitN = g.filter(l => l.lr === 'hit').length;
     const tally = b.legs.length > 1 && g.length ? ` · ${hitN} of ${b.legs.length} hit` : '';
-    return `<div class="card bet">${head}<div class="meta"><span class="badge ${cls}">${esc(b.res)} · $${(b.pay || 0).toFixed(2)}</span>${tally}${b.auto ? ' · graded from the box score' : ''}</div>${closeCall(b) ? `<div class="meta" style="margin-top:6px">${closeCall(b)}</div>` : ''}${legs}</div>`;
+    return `<div class="card bet">${head}<div class="meta"><span class="badge ${cls}">${esc(b.res)} · $${(b.pay || 0).toFixed(2)}</span>${tally}${b.auto ? ' · graded from the box score' : ''}</div>${closeCall(b) ? `<div class="meta" style="margin-top:6px">${closeCall(b)}</div>` : ''}${legs}${delBtn(b)}</div>`;
   }
   const stale = b.start && Date.now() - Date.parse(b.start) > 5 * 3600e3;
   const btns = savingResult ? `<div class="meta" style="margin-top:10px"><span class="badge saving">saving ${esc(savingResult)}</span></div>` :
     `<div class="res">${['win', 'loss', 'push'].map(x => `<button class="${x === 'win' ? 'win' : 'ghost'}" data-res="${x}" data-bet="${b.id}">${x[0].toUpperCase() + x.slice(1)}</button>`).join('')}</div>`;
-  return `<div class="card bet">${head}${stale ? '<div class="meta"><span class="badge saving">needs your result</span> couldn\'t be graded automatically</div>' : ''}${legs}${btns}</div>`;
+  return `<div class="card bet">${head}${stale ? '<div class="meta"><span class="badge saving">needs your result</span> couldn\'t be graded automatically</div>' : ''}${legs}${btns}${delBtn(b)}</div>`;
 }
+const delBtn = b => `<div class="cardfoot"><button class="link del" data-del="${b.id}">Delete bet</button></div>`;
 
 document.addEventListener('click', async e => {
+  const d = e.target.closest('[data-del]');
+  if (d) {
+    const b = D.bets.find(x => x.id === +d.dataset.del);
+    if (!b) return;
+    const ok = await EF.confirm({
+      title: `Delete bet #${b.id}?`,
+      body: `<p><b>${esc(b.entry)}</b> · $${b.stake.toFixed(2)} · placed ${esc(when(b.placed))}<br>${b.legs.map(l => esc(`${l.pl} ${l.side === 'over' ? 'Over' : 'Under'} ${l.pt} ${l.m}`)).join('<br>')}</p>` +
+        '<p>It comes off your record, charts and stats. If you change your mind, restore it from <b>Deleted bets</b> at the bottom of Results.</p>',
+      ok: 'Delete bet', cancel: 'Keep it', danger: true,
+    });
+    if (!ok) return;
+    const n = await EF.send(`delete ${b.id}`, 'delete', {bet: b.id});
+    if (n) EF.toast(`Bet #${b.id} deleted.`);
+    render(); return;
+  }
+  const rs = e.target.closest('[data-restore]');
+  if (rs) {
+    rs.disabled = true;
+    const id = +rs.dataset.restore;
+    const n = await EF.send(`restore ${id}`, 'restore', {bet: id});
+    if (n) EF.toast(`Restoring bet #${id}.`);
+    render(); return;
+  }
   const r = e.target.closest('[data-res]');
   if (r) {
     r.disabled = true;
@@ -785,7 +829,7 @@ let resized; window.addEventListener('resize', () => { clearTimeout(resized); re
 
 // While a save is waiting to be recorded, check for fresh data every 30 seconds.
 setInterval(async () => {
-  if (!EF.pending().some(p => p.kind === 'bet' || p.kind === 'result')) return;
+  if (!EF.pending().some(p => ['bet', 'result', 'delete', 'restore'].includes(p.kind))) return;
   try {
     const r = await fetch('bets-data.json?t=' + Date.now(), {cache: 'no-store'});
     if (r.ok) { const nd = await r.json(); if (nd.gen !== D.gen) { D = nd; render(); } }

@@ -167,7 +167,7 @@ def grade_open_bets(con, cfg, now=None, fetch=http_get, aliases=None, log=print)
     legs = con.execute(
         "SELECT l.*, b.league, e.home, e.away FROM bet_legs l JOIN bets b ON b.id=l.bet_id"
         " LEFT JOIN events e ON e.event_id=l.event_id"
-        " WHERE b.result IS NULL AND l.leg_result IS NULL AND l.commence_time IS NOT NULL").fetchall()
+        " WHERE b.result IS NULL AND b.deleted_at IS NULL AND l.leg_result IS NULL AND l.commence_time IS NOT NULL").fetchall()
     boxes = {}
     for l in legs:
         if parse_iso(l["commence_time"]) + timedelta(hours=FINAL_AFTER.get(l["league"], 3)) > now:
@@ -198,7 +198,7 @@ def grade_open_bets(con, cfg, now=None, fetch=http_get, aliases=None, log=print)
     con.commit()
 
     settled = 0
-    for b in con.execute("SELECT * FROM bets WHERE result IS NULL").fetchall():
+    for b in con.execute("SELECT * FROM bets WHERE result IS NULL AND deleted_at IS NULL").fetchall():
         ls = con.execute("SELECT * FROM bet_legs WHERE bet_id=?", (b["id"],)).fetchall()
         if not ls or any(l["leg_result"] is None for l in ls):
             continue

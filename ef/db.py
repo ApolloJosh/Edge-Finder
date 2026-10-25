@@ -101,7 +101,8 @@ CREATE TABLE IF NOT EXISTS bets (
   result TEXT,                     -- NULL | win | loss | push | partial
   payout REAL,
   notes TEXT,
-  graded_by TEXT                   -- 'auto' (ESPN) | NULL (by hand)
+  graded_by TEXT,                  -- 'auto' (ESPN) | NULL (by hand)
+  deleted_at TEXT                  -- set when you delete it; hidden everywhere, restorable
 );
 
 CREATE TABLE IF NOT EXISTS bet_legs (
@@ -124,7 +125,7 @@ CREATE TABLE IF NOT EXISTS bet_legs (
 # Columns added after the first release, so older databases pick them up.
 ADDED = [
     ("board_picks", "flagged", "INTEGER"), ("board_picks", "edge", "REAL"),
-    ("bets", "graded_by", "TEXT"),
+    ("bets", "graded_by", "TEXT"), ("bets", "deleted_at", "TEXT"),
     ("bet_legs", "flagged", "INTEGER"), ("bet_legs", "edge", "REAL"),
     ("bet_legs", "actual", "REAL"), ("bet_legs", "leg_result", "TEXT"),
 ]

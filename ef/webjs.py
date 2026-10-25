@@ -26,6 +26,8 @@ background:var(--ink);color:var(--bg);border-radius:12px;padding:11px 16px;font-
 transition:transform .2s ease;box-shadow:var(--shadow)}
 #toast.on{transform:translate(-50%,0)}
 #toast.bad{background:var(--bad);color:#fff}
+button.danger{background:var(--bad);border-color:var(--bad);color:var(--bg)}
+.sheet .cf-body p{margin:6px 0 10px}
 body.docked #toast{bottom:calc(240px + env(safe-area-inset-bottom))}
 nav.top a.gear{margin-left:auto}
 """
@@ -136,7 +138,30 @@ notes on Edge-Finder; it can't change code or see anything else.</p>
   function openSettings(why) { const bg = sheet(); render(why); bg.classList.add('on'); document.getElementById('sheet').classList.add('on'); }
   function close() { document.getElementById('sheet-bg').classList.remove('on'); document.getElementById('sheet').classList.remove('on'); }
   document.addEventListener('click', e => { if (e.target.closest('#navset')) { e.preventDefault(); openSettings(); } });
-  return {send, pending, openSettings, token, toast, issueLink, store};
+
+  // Ask before anything that can't be taken back with one tap. Resolves true only on the confirm button.
+  function confirm(o) {
+    return new Promise(resolve => {
+      let bg = document.getElementById('cf-bg'), s = document.getElementById('cf');
+      if (!bg) {
+        bg = document.createElement('div'); bg.id = 'cf-bg'; bg.className = 'sheet-bg';
+        s = document.createElement('div'); s.id = 'cf'; s.className = 'sheet'; s.setAttribute('role', 'dialog'); s.setAttribute('aria-modal', 'true');
+        s.innerHTML = '<div class="sheet-in"><h3></h3><div class="cf-body"></div><div class="row"><button class="ghost" id="cf-no"></button><button id="cf-yes"></button></div></div>';
+        document.body.appendChild(bg); document.body.appendChild(s);
+      }
+      s.querySelector('h3').textContent = o.title;
+      s.querySelector('.cf-body').innerHTML = o.body || '';
+      const yes = s.querySelector('#cf-yes'), no = s.querySelector('#cf-no');
+      yes.textContent = o.ok || 'OK'; no.textContent = o.cancel || 'Cancel';
+      yes.className = o.danger ? 'danger' : '';
+      const done = v => { bg.classList.remove('on'); s.classList.remove('on'); document.removeEventListener('keydown', esc); resolve(v); };
+      const esc = e => { if (e.key === 'Escape') done(false); };
+      yes.onclick = () => done(true); no.onclick = () => done(false); bg.onclick = () => done(false);
+      document.addEventListener('keydown', esc);
+      bg.classList.add('on'); s.classList.add('on'); no.focus();
+    });
+  }
+  return {send, pending, openSettings, token, toast, issueLink, store, confirm};
 })();
 """
 

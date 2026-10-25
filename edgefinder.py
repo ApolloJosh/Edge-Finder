@@ -10,6 +10,7 @@ against the sharp books and flags the few worth betting.
   python3 edgefinder.py bet nba 4 9 12 --entry ud3 --stake 2
   python3 edgefinder.py watch nba          closing snapshot before each game you bet
   python3 edgefinder.py result 7 win
+  python3 edgefinder.py delete 7           take a bet out of your record (restore 7 undoes it)
   python3 edgefinder.py bets               recent bets
   python3 edgefinder.py clv                closing line value report
 
@@ -261,6 +262,10 @@ def main(argv=None):
         sp.add_argument("league", choices=["nba", "nfl"])
         sp.add_argument("--minutes", type=int, default=15)
 
+    for name in ("delete", "restore"):
+        sp = sub.add_parser(name)
+        sp.add_argument("bet_id", type=int)
+
     sp = sub.add_parser("result")
     sp.add_argument("bet_id", type=int)
     sp.add_argument("outcome", choices=["win", "loss", "push", "partial"])
@@ -322,6 +327,10 @@ def main(argv=None):
     elif args.cmd == "result":
         pay = betlog.set_result(con, cfg, args.bet_id, args.outcome, payout=args.payout, hits=args.hits)
         print("Bet #%d: %s, payout $%.2f" % (args.bet_id, args.outcome, pay))
+    elif args.cmd == "delete":
+        print(betlog.delete_bet(con, args.bet_id))
+    elif args.cmd == "restore":
+        print(betlog.restore_bet(con, args.bet_id))
     elif args.cmd == "bets":
         betlog.update_closes(con, cfg)
         print(betlog.list_bets(con))

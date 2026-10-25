@@ -360,3 +360,47 @@ class Closeness(unittest.TestCase):
         self.assertEqual(web.payout_if_hit(CFG, k, [self.leg("over", 5.5, 5, "miss")]), 7)
         f = {"book": "fliff", "entry_type": "straight", "stake": 2.0, "contracts": None}
         self.assertEqual(web.payout_if_hit(CFG, f, [self.leg("over", 5.5, 5, "miss", price=2.1)]), 4.2)
+
+
+class DeleteBets(unittest.TestCase):
+    def test_delete_and_restore(self):
+        tmp = tempfile.mkdtemp()
+        os.environ["EDGEFINDER_DB"] = os.path.join(tmp, "d.db")
+        try:
+            import edgefinder
+            con = connect()
+            t0 = utcnow() + timedelta(hours=3)
+            ev, od, ka = nba_fixture(t0)
+            api = FakeAPI(ev, od, ka)
+            automod.run_league(con, ACFG, "nba", "K", now=t0 - timedelta(minutes=55), fetch=api, log=lambda *a: None)
+            b = boardmod.build(con, CFG, "nba", now=t0 - timedelta(minutes=50))
+            boardmod.save_codes(con, b)
+            code = [x for x in b["fliff"] if x["side"] == "over"][0]["code"]
+            ids = [betlog.log_bet(con, CFG, "nba", [code], board_ts=b["built_at"])[0] for _ in range(2)]
+
+            self.assertIn("delete", web.ALLOWED)
+            self.assertIn("restore", web.ALLOWED)
+            self.assertEqual(web.parse_issue("delete 2", "```\ndelete 2\n```"), ["delete", "2"])
+            ok, text = edgefinder.handle_command(["delete", str(ids[1])], 20)
+            self.assertTrue(ok, text)
+            self.assertIn("Deleted bet #%d" % ids[1], text)
+            ok, text = edgefinder.handle_command(["delete", "99"], 21)
+            self.assertFalse(ok)
+
+            con = connect()
+            data = web.results_payload(con, CFG, "x/y", utcnow())
+            self.assertEqual([x["id"] for x in data["bets"]], [ids[0]])
+            self.assertEqual([x["id"] for x in data["deleted"]], [ids[1]])
+            # a deleted bet costs nothing: no closing snapshot for it
+            legs = betlog.legs_needing_close(con, "nba", t0 + timedelta(minutes=10), 30)
+            self.assertEqual({l["bet_id"] for l in legs}, {ids[0]})
+            self.assertNotIn("#%d " % ids[1], betlog.list_bets(con))
+
+            ok, text = edgefinder.handle_command(["restore", str(ids[1])], 22)
+            self.assertTrue(ok, text)
+            con = connect()
+            data = web.results_payload(con, CFG, "x/y", utcnow())
+            self.assertEqual(sorted(x["id"] for x in data["bets"]), ids)
+            self.assertEqual(data["deleted"], [])
+        finally:
+            del os.environ["EDGEFINDER_DB"]

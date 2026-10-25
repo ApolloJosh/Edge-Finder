@@ -134,7 +134,7 @@ def update_closes(con, cfg, now=None):
     now = now or utcnow()
     legs = con.execute(
         "SELECT l.*, b.league FROM bet_legs l JOIN bets b ON b.id=l.bet_id"
-        " WHERE l.close_fair_p IS NULL AND l.commence_time <= ?", (iso(now),)).fetchall()
+        " WHERE b.deleted_at IS NULL AND l.close_fair_p IS NULL AND l.commence_time <= ?", (iso(now),)).fetchall()
     n = 0
     for leg in legs:
         got = fair_at(con, cfg, leg["league"], leg, leg["commence_time"])
@@ -149,7 +149,7 @@ def update_closes(con, cfg, now=None):
 def legs_needing_close(con, league, now, minutes):
     return con.execute(
         "SELECT l.*, b.league FROM bet_legs l JOIN bets b ON b.id=l.bet_id"
-        " WHERE b.league=? AND l.commence_time > ? AND l.commence_time <= ?",
+        " WHERE b.league=? AND b.deleted_at IS NULL AND l.commence_time > ? AND l.commence_time <= ?",
         (league, iso(now), iso(now + timedelta(minutes=minutes)))).fetchall()
 
 
@@ -180,7 +180,7 @@ def watch(con, cfg, league, key, lead=12, poll=60, fetch=None, log=print, sleep=
             now = utcnow()
             future = con.execute(
                 "SELECT DISTINCT l.event_id, l.commence_time FROM bet_legs l JOIN bets b ON b.id=l.bet_id"
-                " WHERE b.league=? AND l.commence_time > ?", (league, iso(now))).fetchall()
+                " WHERE b.league=? AND b.deleted_at IS NULL AND l.commence_time > ?", (league, iso(now))).fetchall()
             if not future:
                 n = update_closes(con, cfg, now)
                 log("Every game you bet has started. Closing lines saved for %d leg(s)." % n)
@@ -206,6 +206,29 @@ def watch(con, cfg, league, key, lead=12, poll=60, fetch=None, log=print, sleep=
 
 
 # ------------------------------------------------------------------ results & report
+
+
+def delete_bet(con, bet_id, now=None):
+    """Take a bet out of your record (a duplicate, a mistake). It's hidden from
+    Results, grading, closing snapshots and stats, but kept, so it can be restored."""
+    b = con.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
+    if not b:
+        raise SystemExit("No bet #%s." % bet_id)
+    if b["deleted_at"]:
+        return "Bet #%d was already deleted." % bet_id
+    con.execute("UPDATE bets SET deleted_at=? WHERE id=?", (iso(now or utcnow()), bet_id))
+    con.commit()
+    return "Deleted bet #%d (%s %s, $%.2f). Restore it with: restore %d" % (
+        bet_id, BOOK_LABELS.get(b["book"], b["book"]), b["entry_type"] or "", b["stake"] or 0, bet_id)
+
+
+def restore_bet(con, bet_id):
+    b = con.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
+    if not b:
+        raise SystemExit("No bet #%s." % bet_id)
+    con.execute("UPDATE bets SET deleted_at=NULL WHERE id=?", (bet_id,))
+    con.commit()
+    return "Restored bet #%d." % bet_id
 
 
 def set_result(con, cfg, bet_id, result, payout=None, hits=None):
@@ -241,7 +264,7 @@ def _ge_tag(cfg, p):
 
 
 def list_bets(con, limit=30):
-    bets = con.execute("SELECT * FROM bets ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    bets = con.execute("SELECT * FROM bets WHERE deleted_at IS NULL ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     lines = []
     for b in bets:
         when = local(parse_iso(b["placed_at"])).strftime("%m/%d %I:%M%p")
@@ -268,7 +291,7 @@ def clv_summary(con, cfg, league=None, now=None):
     """Structured CLV and results numbers, used by the text report and the Bets page."""
     update_closes(con, cfg, now)
     q = ("SELECT l.*, b.league, b.book, b.entry_type, b.placed_at FROM bet_legs l JOIN bets b ON b.id=l.bet_id"
-         " WHERE l.close_fair_p IS NOT NULL")
+         " WHERE b.deleted_at IS NULL AND l.close_fair_p IS NOT NULL")
     args = []
     if league:
         q += " AND b.league=?"
@@ -285,7 +308,7 @@ def clv_summary(con, cfg, league=None, now=None):
     s["books"] = [(k, _stats(v)) for k, v in sorted(groups.items())]
     s["weeks"] = [(k, _stats(v)) for k, v in sorted(weeks.items())]
     s["ge"] = [(k, _stats(tags[k])) for k in ("agree", "neutral", "conflict", "no GE") if tags.get(k)]
-    settled = con.execute("SELECT * FROM bets WHERE result IS NOT NULL" + (" AND league=?" if league else ""),
+    settled = con.execute("SELECT * FROM bets WHERE deleted_at IS NULL AND result IS NOT NULL" + (" AND league=?" if league else ""),
                           ([league] if league else [])).fetchall()
     staked = sum(b["stake"] or 0 for b in settled)
     paid = sum(b["payout"] or 0 for b in settled)
