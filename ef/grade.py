@@ -262,6 +262,8 @@ def set_actual(con, cfg, bet_id, leg, value):
     con.commit()
     what = "cleared" if v == "clear" else ("didn't play (void)" if res == "void" else "%g (%s)" % (act, res))
     msg = "Bet #%d leg %d, %s: %s." % (bet_id, leg, l["player"], what)
+    if b["result"] == "cashout":
+        return msg + " The bet stays cashed out."      # the legs inform how-close stats only
     outcome = None if v == "clear" else settle(con, cfg, b, "fixed")
     if outcome:
         nb = con.execute("SELECT payout FROM bets WHERE id=?", (bet_id,)).fetchone()

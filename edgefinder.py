@@ -301,7 +301,7 @@ def main(argv=None):
 
     sp = sub.add_parser("result")
     sp.add_argument("bet_id", type=int)
-    sp.add_argument("outcome", choices=["win", "loss", "push", "partial"])
+    sp.add_argument("outcome", choices=["win", "loss", "push", "partial", "cashout"])
     sp.add_argument("--payout", type=float)
     sp.add_argument("--hits", type=int, help="pick'em: how many legs hit (flex entries)")
 
@@ -359,6 +359,9 @@ def main(argv=None):
         betlog.watch(con, cfg, args.league, odds_api_key(), lead=args.minutes)
     elif args.cmd == "result":
         pay = betlog.set_result(con, cfg, args.bet_id, args.outcome, payout=args.payout, hits=args.hits)
+        if args.outcome == "cashout":
+            con.execute("UPDATE bets SET graded_by=NULL WHERE id=?", (args.bet_id,))
+            con.commit()
         print("Bet #%d: %s, payout $%.2f" % (args.bet_id, args.outcome, pay))
     elif args.cmd == "actual":
         print(grademod.set_actual(con, cfg, args.bet_id, args.leg, args.value))

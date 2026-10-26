@@ -108,6 +108,7 @@ ul.break li span:last-child{color:var(--dim);font-variant-numeric:tabular-nums;t
 .bet li:first-child{border-top:0}
 .res{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
 .res .btn,.res button{width:100%;min-height:46px}
+button.cashbtn{width:100%;min-height:46px;margin-top:8px}
 
 .badge{font-size:12px;font-weight:700;border-radius:6px;padding:2px 8px;background:var(--chip);color:var(--dim)}
 .badge.win{background:var(--accent-bg);color:var(--accent)}.badge.loss{background:var(--bad-bg);color:var(--bad)}
@@ -433,7 +434,7 @@ def results_payload(con, cfg, repo, now):
             entry = "%s · straight" % BOOK_LABELS.get(b["book"], b["book"])
         starts = [l["commence_time"] for l in legs if l["commence_time"]]
         could = None
-        if b["result"] is not None and (b["payout"] or 0) < (b["stake"] or 0):
+        if b["result"] not in (None, "cashout") and (b["payout"] or 0) < (b["stake"] or 0):
             could = payout_if_hit(cfg, b, legs)
         (deleted if b["deleted_at"] else bets).append({
             "id": b["id"], "placed": b["placed_at"], "lg": b["league"], "book": b["book"],
@@ -523,7 +524,8 @@ const when = iso => new Date(iso).toLocaleDateString(undefined, {weekday: 'short
 let range = 'all', league = 'all';
 try { range = localStorage.getItem('ef-range') || 'all'; } catch (e) {}
 
-function outcome(b) { if (b.res == null) return null; const d = (b.pay || 0) - b.stake; return d > 0.005 ? 'W' : d < -0.005 ? 'L' : 'P'; }
+function outcome(b) { if (b.res == null) return null; if (b.res === 'cashout') return 'C'; const d = (b.pay || 0) - b.stake; return d > 0.005 ? 'W' : d < -0.005 ? 'L' : 'P'; }
+const cashNote = bs => { const c = bs.filter(b => b.res === 'cashout').length; return c ? ` · ${c} cashed out` : ''; };
 function inScope(b) {
   if (league !== 'all' && b.lg !== league) return false;
   if (range === 'all') return true;
@@ -688,7 +690,7 @@ function byBets(list, keyFn) {
   for (const b of list) { const k = keyFn(b); if (k == null) continue; (m.get(k) || m.set(k, []).get(k)).push(b); }
   return [...m].map(([k, bs]) => {
     const st = bs.reduce((s, b) => s + b.stake, 0), net = bs.reduce((s, b) => s + (b.pay || 0) - b.stake, 0);
-    const rec = ['W', 'L', 'P'].map(o => bs.filter(b => outcome(b) === o).length).join('-');
+    const rec = ['W', 'L', 'P'].map(o => bs.filter(b => outcome(b) === o).length).join('-') + cashNote(bs);
     return {k, n: bs.length, v: st ? net / st : 0, sub: `${rec} · ${money(net)} on $${st.toFixed(0)}`};
   }).sort((a, b) => b.n - a.n);
 }
@@ -708,7 +710,9 @@ function render() {
   const recorded = new Set(all.map(b => b.note).filter(Boolean));
   const settledIds = new Set(D.bets.filter(b => b.res != null).map(b => b.id));
   const liveIds = new Set(D.bets.map(b => b.id));
-  const pend = EF.pending(p => p.kind === 'bet' ? recorded.has('issue #' + p.n) : p.kind === 'result' ? settledIds.has(p.bet)
+  const pend = EF.pending(p => p.kind === 'bet' ? recorded.has('issue #' + p.n)
+    : p.kind === 'result' ? (p.pay != null ? D.bets.some(b => b.id === p.bet && b.res === 'cashout' && Math.abs((b.pay || 0) - p.pay) < 0.005)
+                                             || Date.now() - p.ts > 15 * 60e3 : settledIds.has(p.bet))
     : p.kind === 'delete' ? !liveIds.has(p.bet) : p.kind === 'restore' ? liveIds.has(p.bet)
     : p.kind === 'edit' ? D.bets.some(b => b.id === p.bet && Math.abs(b.stake - p.stake) < 0.005) || Date.now() - p.ts > 15 * 60e3
     : p.kind === 'fix' ? fixLanded(all, p) || Date.now() - p.ts > 15 * 60e3 : false);
@@ -731,7 +735,7 @@ function render() {
   const expZ = withE.length ? withE.reduce((s, l) => s + l.ez, 0) / withE.length : null;
   const gotZ = withE.length ? withE.reduce((s, l) => s + zOf(l), 0) / withE.length : null;
   let h = `<div class="kpis">
-<div class="kpi"><div class="k">Record</div><div class="v">${settled.length ? rec.join('-') : '—'}</div><div class="s">won-lost-push · ${settled.length} settled</div></div>
+<div class="kpi"><div class="k">Record</div><div class="v">${settled.length ? rec.join('-') : '—'}</div><div class="s">won-lost-push${cashNote(settled)} · ${settled.length} settled</div></div>
 <div class="kpi"><div class="k">Profit</div><div class="v ${net >= 0 ? 'pos' : 'neg'}">${settled.length ? money(net) : '—'}</div><div class="s">${settled.length ? sgn(100 * net / staked) + '% on $' + staked.toFixed(0) + ' staked' : 'nothing settled yet'}</div></div>
 <div class="kpi"><div class="k">Closing line value</div><div class="v ${clv != null && clv >= 0 ? 'pos' : clv != null ? 'neg' : ''}">${clv == null ? '—' : sgn(100 * clv)}</div><div class="s">${clv == null ? 'fills in at tip-off' : 'pts per leg · ' + clvLegs.length + ' legs'}</div></div>
 <div class="kpi"><div class="k">Legs hit</div><div class="v">${graded.length ? pct(graded.filter(l => l.lr === 'hit').length / graded.length) : '—'}</div><div class="s">${graded.length ? 'vs ' + pct(graded.reduce((s, l) => s + l.fair, 0) / graded.length) + ' expected · ' + graded.length + ' legs' : 'graded after each game'}</div></div>
@@ -812,18 +816,20 @@ function betCard(b, savingResult) {
     return `<li>${mk}<b>${esc(l.pl)}</b> ${l.side === 'over' ? 'Over' : 'Under'} ${l.pt} ${esc(l.m)}<div class="meta">fair ${pct(l.fair, 1)}${clv}</div>${legClose(l)}${fixLink(b, l)}</li>`;
   }).join('') + '</ul>';
   if (b.res != null) {
-    const cls = o === 'W' ? 'win' : o === 'L' ? 'loss' : '';
+    const net = (b.pay || 0) - b.stake;
+    const cls = o === 'W' || (o === 'C' && net > 0.005) ? 'win' : o === 'L' || (o === 'C' && net < -0.005) ? 'loss' : '';
     const g = b.legs.filter(l => l.lr === 'hit' || l.lr === 'miss'), hitN = g.filter(l => l.lr === 'hit').length;
     const tally = b.legs.length > 1 && g.length ? ` · ${hitN} of ${b.legs.length} hit` : '';
-    return `<div class="card bet">${head}<div class="meta"><span class="badge ${cls}">${esc(b.res)} · $${(b.pay || 0).toFixed(2)}</span>${tally}${b.auto ? ' · graded from the box score' : b.fixed ? ' · settled from your fix' : ''}</div>${closeCall(b) ? `<div class="meta" style="margin-top:6px">${closeCall(b)}</div>` : ''}${legs}${delBtn(b)}</div>`;
+    return `<div class="card bet">${head}<div class="meta"><span class="badge ${cls}">${o === 'C' ? `cashed out · $${(b.pay || 0).toFixed(2)} (${money(net)})` : `${esc(b.res)} · $${(b.pay || 0).toFixed(2)}`}</span>${tally}${b.auto ? ' · graded from the box score' : b.fixed ? ' · settled from your fix' : ''}</div>${closeCall(b) ? `<div class="meta" style="margin-top:6px">${closeCall(b)}</div>` : ''}${legs}${delBtn(b)}</div>`;
   }
   const stale = b.start && Date.now() - Date.parse(b.start) > 5 * 3600e3;
   const btns = savingResult ? `<div class="meta" style="margin-top:10px"><span class="badge saving">saving ${esc(savingResult)}</span></div>` :
-    `<div class="res">${['win', 'loss', 'push'].map(x => `<button class="${x === 'win' ? 'win' : 'ghost'}" data-res="${x}" data-bet="${b.id}">${x[0].toUpperCase() + x.slice(1)}</button>`).join('')}</div>`;
+    `<div class="res">${['win', 'loss', 'push'].map(x => `<button class="${x === 'win' ? 'win' : 'ghost'}" data-res="${x}" data-bet="${b.id}">${x[0].toUpperCase() + x.slice(1)}</button>`).join('')}</div>
+<button class="ghost cashbtn" data-cash="${b.id}">Cash out</button>`;
   return `<div class="card bet">${head}${stale ? '<div class="meta"><span class="badge saving">needs your result</span> couldn\'t be graded automatically</div>' : ''}${legs}${btns}${delBtn(b)}</div>`;
 }
 const delBtn = b => editing.has(b.id) ? '<div class="cardfoot"><span class="badge saving">saving edit</span></div>'
-  : `<div class="cardfoot"><button class="link del" data-edit="${b.id}">Edit</button><button class="link del" data-del="${b.id}">Delete bet</button></div>`;
+  : `<div class="cardfoot">${b.res === 'cashout' ? `<button class="link del" data-cash="${b.id}">Change cash out</button>` : ''}<button class="link del" data-edit="${b.id}">Edit</button><button class="link del" data-del="${b.id}">Delete bet</button></div>`;
 let editing = new Set(), fixing = new Map();
 function fixLanded(all, p) {
   const b = all.find(x => x.id === p.bet), l = b && b.legs.find(x => x.n === p.leg);
@@ -853,6 +859,24 @@ document.addEventListener('click', async e => {
     if (!ok) return;
     const n = await EF.send(`delete ${b.id}`, 'delete', {bet: b.id});
     if (n) EF.toast(`Bet #${b.id} deleted.`);
+    render(); return;
+  }
+  const co = e.target.closest('[data-cash]');
+  if (co) {
+    const b = D.bets.find(x => x.id === +co.dataset.cash);
+    if (!b) return;
+    const pr = EF.confirm({title: `Cash out bet #${b.id}`, ok: 'Save cash out', cancel: 'Cancel', body:
+      `<p><b>${esc(b.entry)}</b> · $${b.stake.toFixed(2)} staked<br>${b.legs.map(l => esc(`${l.pl} ${l.side === 'over' ? 'Over' : 'Under'} ${l.pt} ${l.m}`)).join('<br>')}</p>
+<label class="fld">Cashed out for ($) <input id="co-v" type="number" inputmode="decimal" min="0" step="0.01" value="${b.res === 'cashout' ? (b.pay || 0).toFixed(2) : ''}"></label>
+<p class="fx-prev" id="co-prev"></p><p>The full amount the app paid you back. The bet is settled at that.</p>`});
+    const prev = () => { const v = parseFloat($('#co-v').value);
+      $('#co-prev').textContent = isNaN(v) ? '' : `${money(v - b.stake)} on your $${b.stake.toFixed(2)} stake`; };
+    prev(); $('#co-v').oninput = prev; setTimeout(() => $('#co-v').focus(), 250);
+    if (!(await pr)) return;
+    const v = Math.round(parseFloat($('#co-v').value) * 100) / 100;
+    if (!(v >= 0)) { EF.toast('Enter what you cashed out for.', true); return; }
+    const n = await EF.send(`result ${b.id} cashout --payout ${v.toFixed(2)}`, 'result', {bet: b.id, outcome: 'cash out', pay: v});
+    if (n) EF.toast(`Cash out saved: ${money(v - b.stake)}.`);
     render(); return;
   }
   const fx = e.target.closest('[data-fix]');

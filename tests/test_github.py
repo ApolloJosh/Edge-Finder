@@ -574,3 +574,27 @@ class FixStats(unittest.TestCase):
         with self.assertRaises(SystemExit):
             set_actual(self.con, CFG, bid, 9, "3")
         self.assertIn("actual", web.ALLOWED)
+
+
+class CashOut(unittest.TestCase):
+    def test_cash_out(self):
+        from ef.grade import set_actual
+        con = connect(os.path.join(tempfile.mkdtemp(), "co.db"))
+        t0 = utcnow() + timedelta(hours=3)
+        ev, od, ka = nba_fixture(t0)
+        automod.run_league(con, ACFG, "nba", "K", now=t0 - timedelta(minutes=55), fetch=FakeAPI(ev, od, ka), log=lambda *a: None)
+        b = boardmod.build(con, CFG, "nba", now=t0 - timedelta(minutes=50))
+        boardmod.save_codes(con, b)
+        fl = [x for x in b["fliff"] if x["side"] == "over"][0]
+        bid = betlog.log_bet(con, CFG, "nba", [fl["code"]], stake=2, board_ts=b["built_at"])[0]
+        with self.assertRaises(SystemExit):
+            betlog.set_result(con, CFG, bid, "cashout")                      # needs the amount
+        betlog.set_result(con, CFG, bid, "cashout", payout=3.2)
+        r = con.execute("SELECT result, payout FROM bets WHERE id=?", (bid,)).fetchone()
+        self.assertEqual((r["result"], r["payout"]), ("cashout", 3.2))
+        set_actual(con, CFG, bid, 1, "10")                                    # the leg missed, but it was cashed out
+        r = con.execute("SELECT result, payout FROM bets WHERE id=?", (bid,)).fetchone()
+        self.assertEqual((r["result"], r["payout"]), ("cashout", 3.2))
+        data = web.results_payload(con, CFG, "x/y", utcnow())
+        self.assertIsNone(data["bets"][0]["could"])                           # no "one hook from" on a cash out
+        self.assertEqual(web.parse_issue("result 1 cashout --payout 3.20", ""), ["result", "1", "cashout", "--payout", "3.20"])

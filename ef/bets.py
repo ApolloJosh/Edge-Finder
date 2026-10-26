@@ -284,6 +284,8 @@ def set_result(con, cfg, bet_id, result, payout=None, hits=None):
     b = con.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
     if not b:
         raise SystemExit("No bet #%s." % bet_id)
+    if result == "cashout" and (payout is None or payout < 0):
+        raise SystemExit("A cash out needs the amount you got: result %s cashout --payout 3.20" % bet_id)
     if payout is None:
         legs = con.execute("SELECT * FROM bet_legs WHERE bet_id=?", (bet_id,)).fetchall()
         if result == "loss":

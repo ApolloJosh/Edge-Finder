@@ -65,7 +65,10 @@ pruned after 3 days.
 6. A player's number wrong or missing? Each leg on Results has **Fix stat** (or **Enter result** when the box
    score didn't have the player). Type the final number, or tick **Didn't play**; the leg becomes hit, miss,
    push or void and the bet re-settles. **Undo my fix** hands it back to the box score.
-7. Logged something wrong? Every bet on Results has **Edit** (the stake; for Kalshi, what you spent and the
+7. Cashed out early? Open bets have a **Cash out** button: enter the full amount the app paid you back and the
+   bet settles at that. The record counts cash outs on their own (won-lost-push · N cashed out); profit
+   includes them. **Change cash out** fixes the amount later.
+8. Logged something wrong? Every bet on Results has **Edit** (the stake; for Kalshi, what you spent and the
    shares you got, straight from Kalshi's order history) and **Delete bet**, which asks first and can be
    undone from **Deleted bets** at the bottom of Results.
 
