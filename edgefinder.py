@@ -298,6 +298,7 @@ def main(argv=None):
     sp.add_argument("--stake", type=float)
     sp.add_argument("--contracts", type=float, help="Kalshi shares you got (fractional is fine)")
     sp.add_argument("--price", type=float, help="Fliff decimal odds you got")
+    sp.add_argument("--payout", type=float, help="what the app actually paid on a settled bet")
 
     sp = sub.add_parser("result")
     sp.add_argument("bet_id", type=int)
@@ -376,7 +377,8 @@ def main(argv=None):
     elif args.cmd == "restore":
         print(betlog.restore_bet(con, args.bet_id))
     elif args.cmd == "edit":
-        print(betlog.edit_bet(con, cfg, args.bet_id, stake=args.stake, contracts=args.contracts, price=args.price))
+        print(betlog.edit_bet(con, cfg, args.bet_id, stake=args.stake, contracts=args.contracts, price=args.price,
+                              payout=args.payout))
     elif args.cmd == "bets":
         betlog.update_closes(con, cfg)
         print(betlog.list_bets(con))

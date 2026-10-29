@@ -598,3 +598,25 @@ class CashOut(unittest.TestCase):
         data = web.results_payload(con, CFG, "x/y", utcnow())
         self.assertIsNone(data["bets"][0]["could"])                           # no "one hook from" on a cash out
         self.assertEqual(web.parse_issue("result 1 cashout --payout 3.20", ""), ["result", "1", "cashout", "--payout", "3.20"])
+
+
+class EditPayout(unittest.TestCase):
+    def test_payout_after_a_push(self):
+        con = connect(os.path.join(tempfile.mkdtemp(), "p.db"))
+        cur = con.execute("INSERT INTO bets (placed_at, league, book, entry_type, stake) VALUES (?,?,?,?,?)",
+                          ("2026-10-28T22:13:00Z", "nba", "prizepicks", "pp2", 10.0))
+        bid = cur.lastrowid
+        con.commit()
+        with self.assertRaises(SystemExit):
+            betlog.edit_bet(con, CFG, bid, payout=15)                         # not settled yet
+        betlog.set_result(con, CFG, bid, "win", payout=30)                    # Win tapped: full 3x
+        msg = betlog.edit_bet(con, CFG, bid, payout=15)
+        self.assertIn("Paid $15.00 (win)", msg)
+        r = con.execute("SELECT stake, payout, result FROM bets WHERE id=?", (bid,)).fetchone()
+        self.assertEqual(tuple(r), (10.0, 15.0, "win"))
+        betlog.edit_bet(con, CFG, bid, stake=10, payout=10)
+        self.assertEqual(con.execute("SELECT result FROM bets WHERE id=?", (bid,)).fetchone()["result"], "push")
+        betlog.edit_bet(con, CFG, bid, payout=4)
+        self.assertEqual(con.execute("SELECT result FROM bets WHERE id=?", (bid,)).fetchone()["result"], "partial")
+        betlog.set_result(con, CFG, bid, "win", payout=15)                    # the Win-with-a-push prompt
+        self.assertEqual(con.execute("SELECT payout FROM bets WHERE id=?", (bid,)).fetchone()["payout"], 15.0)

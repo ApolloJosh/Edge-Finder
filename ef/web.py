@@ -442,7 +442,7 @@ def results_payload(con, cfg, repo, now):
             "stake": round(b["stake"] or 0, 2), "res": b["result"],
             "pay": None if b["payout"] is None else round(b["payout"], 2),
             "auto": b["graded_by"] == "auto", "fixed": b["graded_by"] == "fixed", "note": b["notes"], "start": min(starts) if starts else None,
-            "could": could, "ct": b["contracts"],
+            "could": could, "ct": b["contracts"], "pk": b["book"] in cfg.pickem_books,
             "legs": [dict({"pl": l["player"], "m": market_label(l["market"]), "side": l["side"], "pt": l["point"],
                            "fair": l["fair_p"], "close": l["close_fair_p"], "fl": l["flagged"], "edge": l["edge"],
                            "price": l["price"], "n": l["leg"], "t": l["commence_time"],
@@ -714,7 +714,8 @@ function render() {
     : p.kind === 'result' ? (p.pay != null ? D.bets.some(b => b.id === p.bet && b.res === 'cashout' && Math.abs((b.pay || 0) - p.pay) < 0.005)
                                              || Date.now() - p.ts > 15 * 60e3 : settledIds.has(p.bet))
     : p.kind === 'delete' ? !liveIds.has(p.bet) : p.kind === 'restore' ? liveIds.has(p.bet)
-    : p.kind === 'edit' ? D.bets.some(b => b.id === p.bet && Math.abs(b.stake - p.stake) < 0.005) || Date.now() - p.ts > 15 * 60e3
+    : p.kind === 'edit' ? D.bets.some(b => b.id === p.bet && Math.abs(b.stake - p.stake) < 0.005 && (p.pay == null || Math.abs((b.pay || 0) - p.pay) < 0.005))
+                           || Date.now() - p.ts > 15 * 60e3
     : p.kind === 'fix' ? fixLanded(all, p) || Date.now() - p.ts > 15 * 60e3 : false);
   const deleting = new Set(pend.filter(p => p.kind === 'delete').map(p => p.bet));
   editing = new Set(pend.filter(p => p.kind === 'edit').map(p => p.bet));
@@ -925,7 +926,9 @@ document.addEventListener('click', async e => {
       ? `<label class="fld">Spent ($) <input id="ed-s" type="number" inputmode="decimal" min="0.01" step="0.01" value="${b.stake.toFixed(2)}"></label>
 <label class="fld">${unit} <input id="ed-c" type="number" inputmode="decimal" min="0.01" step="0.01" value="${b.ct || ''}"></label>
 <p id="ed-sum"></p><p>${b.book === 'kalshi' ? 'Copy both from Kalshi\'s order history (for example "$2.00 · 4.18 shares").' : 'Copy both from Robinhood\'s order (contracts, and the cost including fees).'}</p>`
-      : `<label class="fld">Stake ($) <input id="ed-s" type="number" inputmode="decimal" min="0.01" step="0.01" value="${b.stake.toFixed(2)}"></label>`);
+      : `<label class="fld">Stake ($) <input id="ed-s" type="number" inputmode="decimal" min="0.01" step="0.01" value="${b.stake.toFixed(2)}"></label>`) +
+      (b.res != null ? `<label class="fld">Paid out ($) <input id="ed-p" type="number" inputmode="decimal" min="0" step="0.01" value="${(b.pay || 0).toFixed(2)}"></label>
+<p>Change Paid out to what the app actually paid, for example after a push or a void re-priced the entry.</p>` : '');
     const pr = EF.confirm({title: `Edit bet #${b.id}`, body, ok: 'Save', cancel: 'Cancel'});
     const sum = () => {
       const s = parseFloat($('#ed-s').value), c = parseFloat($('#ed-c').value);
@@ -945,7 +948,14 @@ document.addEventListener('click', async e => {
       if (!(stake > 0)) { EF.toast('The stake has to be more than $0.', true); return; }
       args = `edit ${b.id} --stake ${stake.toFixed(2)}`;
     }
-    const n = await EF.send(args, 'edit', {bet: b.id, stake});
+    let pay = null;
+    if (b.res != null) {
+      pay = Math.round(parseFloat($('#ed-p').value) * 100) / 100;
+      if (!(pay >= 0)) { EF.toast('Enter what the app paid ($0 for a loss).', true); return; }
+      if (Math.abs(pay - (b.pay || 0)) >= 0.005) args += ` --payout ${pay.toFixed(2)}`;
+      else pay = null;
+    }
+    const n = await EF.send(args, 'edit', {bet: b.id, stake, pay});
     if (n) EF.toast(`Bet #${b.id} updated. It shows here in a couple of minutes.`);
     render(); return;
   }
@@ -959,6 +969,22 @@ document.addEventListener('click', async e => {
   }
   const r = e.target.closest('[data-res]');
   if (r) {
+    const b = D.bets.find(x => x.id === +r.dataset.bet);
+    const repriced = b && b.pk && r.dataset.res !== 'loss' && b.legs.some(l => l.lr === 'push' || l.lr === 'void');
+    if (repriced) {        // the app re-prices an entry with a push or void, so ask what it paid
+      const pr = EF.confirm({title: `What did ${b.bl} pay?`, ok: 'Save', cancel: 'Cancel', body:
+        `<p>#${b.id} ${esc(b.entry)} · $${b.stake.toFixed(2)}. A leg pushed or didn't count, so ${esc(b.bl)} re-priced the entry.</p>
+<label class="fld">Paid out ($) <input id="rp-v" type="number" inputmode="decimal" min="0" step="0.01"></label><p class="fx-prev" id="rp-prev"></p>`});
+      $('#rp-v').oninput = () => { const v = parseFloat($('#rp-v').value); $('#rp-prev').textContent = isNaN(v) ? '' : `${money(v - b.stake)} on your $${b.stake.toFixed(2)} stake`; };
+      setTimeout(() => $('#rp-v').focus(), 250);
+      if (!(await pr)) return;
+      const v = Math.round(parseFloat($('#rp-v').value) * 100) / 100;
+      if (!(v >= 0)) { EF.toast('Enter what the app paid.', true); return; }
+      const out = v < 0.005 ? 'loss' : Math.abs(v - b.stake) < 0.005 ? 'push' : v > b.stake ? 'win' : 'partial';
+      const n = await EF.send(`result ${b.id} ${out} --payout ${v.toFixed(2)}`, 'result', {bet: b.id, outcome: out});
+      if (n) EF.toast(`Saved: ${money(v - b.stake)}.`);
+      render(); return;
+    }
     r.disabled = true;
     const n = await EF.send(`result ${r.dataset.bet} ${r.dataset.res}`, 'result', {bet: +r.dataset.bet, outcome: r.dataset.res});
     if (n) EF.toast('Result saved.');

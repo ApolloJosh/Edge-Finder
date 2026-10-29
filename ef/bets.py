@@ -227,13 +227,38 @@ def delete_bet(con, bet_id, now=None):
         bet_id, BOOK_LABELS.get(b["book"], b["book"]), b["entry_type"] or "", b["stake"] or 0, bet_id)
 
 
-def edit_bet(con, cfg, bet_id, stake=None, contracts=None, price=None):
+def edit_bet(con, cfg, bet_id, stake=None, contracts=None, price=None, payout=None):
     """Correct a logged bet to match what the app actually filled.
     Kalshi: what you spent (stake) and the shares you got, as the order history shows them.
-    Others: the stake (and for Fliff the decimal price). A settled bet's payout follows."""
+    Others: the stake (and for Fliff the decimal price). A settled bet's payout follows.
+    payout: what the app actually paid on a settled bet (a pick'em entry re-priced
+    after a push, say). It overrides the worked-out payout, and the result follows it."""
     b = con.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
     if not b:
         raise SystemExit("No bet #%s." % bet_id)
+    if payout is not None:
+        if b["result"] is None:
+            raise SystemExit("Bet #%d isn't settled yet. Set its result first." % bet_id)
+        if payout < 0:
+            raise SystemExit("A payout can't be negative.")
+    msg = _edit_stake(con, cfg, b, stake, contracts, price)
+    if payout is None:
+        return msg
+    b = con.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
+    pay = round(float(payout), 2)
+    result = b["result"]
+    if result != "cashout":
+        result = ("loss" if pay < 0.005 else "push" if abs(pay - b["stake"]) < 0.005
+                  else "win" if pay > b["stake"] else "partial")
+    con.execute("UPDATE bets SET payout=?, result=? WHERE id=?", (pay, result, bet_id))
+    con.commit()
+    return msg + " Paid $%.2f (%s)." % (pay, result)
+
+
+def _edit_stake(con, cfg, b, stake, contracts, price):
+    bet_id = b["id"]
+    if stake is None and contracts is None and price is None:
+        return "Bet #%d:" % bet_id
     pay = b["payout"]
     if b["book"] in ("kalshi", "robinhood"):
         shares = round(float(contracts if contracts is not None else (b["contracts"] or 0)), 2)
