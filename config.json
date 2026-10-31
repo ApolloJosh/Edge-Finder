@@ -121,8 +121,8 @@
   },
 
   "model": {
-    "_note": "How much the overall score leans on Gridiron Edge (NFL) or Full Court Edge (NBA) instead of the sharp books' fair price. Full Court Edge stays at 0 until tools/fce_backtest.py shows a blend beating the sharp price alone (Oct 31: it didn't).",
-    "weight": {"nfl": 0.25, "nba": 0.0}
+    "_note": "How much the overall score leans on Gridiron Edge (NFL) or Full Court Edge (NBA) instead of the sharp books' fair price. A league can be one number or per market with a default. Full Court Edge: rebounds only, the one market where tools/fce_backtest.py showed a blend beating the sharp price (Oct 31: 275 games, 97% of resamples). Re-run it every week or two.",
+    "weight": {"nfl": 0.25, "nba": {"default": 0.0, "player_rebounds": 0.25}}
   },
 
   "full_court_edge": {

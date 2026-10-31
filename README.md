@@ -106,8 +106,8 @@ Each pick is one card: the player and pick, a **score**, and three numbers. Tap 
 has the game, the sharp lines and anything adjusted. The (i) buttons explain each part in the app.
 
 - **Score (0–100)**: the default order under both *Edges* and *All*. It starts from the sharp fair chance,
-  leans toward the model's read by `config.json` → `model.weight` (Gridiron Edge 25%; Full Court Edge 0 until a
-  backtest shows it helps) and asks how much of a bankroll the pick deserves at its price (Kelly). That rewards a bigger edge *and* a better chance of hitting: at the same
+  leans toward the model's read by `config.json` → `model.weight` (Gridiron Edge 25%; Full Court Edge 25% on
+  rebounds only, where a backtest shows it helps) and asks how much of a bankroll the pick deserves at its price (Kelly). That rewards a bigger edge *and* a better chance of hitting: at the same
   edge, a 58% pick scores above a 40% one. 60+ is strong, 40–59 solid, under 40 thin.
 - **Edge**: how much better the app's price is than fair. Kalshi: fair ÷ (ask + fee) − 1. Fliff: fair × odds − 1.
   Pick'em: fair ÷ the per-pick breakeven of the easiest entry it clears − 1.
@@ -144,11 +144,26 @@ ESPN box scores (free; newest first, back to the start of last season). For each
 and turns that into a chance for the line. Preseason games are left out. It doesn't know injuries or who's sitting
 tonight, which the sharp books do.
 
-**It doesn't move the score yet.** `tools/fce_backtest.py` rebuilds every past NBA board as of its pull and grades each
-line against that night's box score. On Oct 31 (1,620 lines, current season only), the sharp fair price alone had a
-log loss of 0.687; Full Court Edge alone 0.764; every blend was worse than the sharp price alone. So its read shows on
-the cards but its weight is 0. Re-run it once last season's box scores are in (Actions → Run workflow →
-fce-backtest); if a blend wins, raise `model.weight.nba` to that weight. Results also tracks its reads on your bets.
+**It moves the score on rebounds only.** `tools/fce_backtest.py` rebuilds every past NBA board as of its pull and
+grades each line against that night's box score, resampling whole player-stat-games so repeated pulls of one
+line don't count as extra evidence. On Oct 31 (1,312 player-stat-games over six nights, with all of last
+season's box scores in):
+
+| market | games | sharp fair | Full Court Edge | blend 25% | blend beats sharp in |
+|---|---|---|---|---|---|
+| Rebounds | 275 | 0.684 | 0.688 | **0.678** | 97% of resamples |
+| Points | 305 | 0.693 | 0.744 | 0.698 | 7% |
+| Pts + Reb + Ast | 246 | 0.691 | 0.741 | 0.696 | 14% |
+| Assists | 228 | 0.679 | 0.720 | 0.685 | 6% |
+| 3-pointers | 258 | 0.682 | 0.710 | 0.685 | 16% |
+
+(log loss; lower is better). On rebounds the blend beat the sharp price on every night with rebound lines, and
+the gap held where it mattered: when Full Court Edge sat 10+ points above fair, overs hit 62% against a fair
+49%. Everywhere else the sharp price is better on its own. So `model.weight.nba` is
+`{"default": 0, "player_rebounds": 0.25}`: half the best in-sample weight, to allow for luck, and other markets'
+reads show on the cards without moving the score. One market out of five clearing the bar can still be chance;
+re-run the backtest every week or two (Actions → Run workflow → fce-backtest) and pull rebounds back to 0 if it
+stops holding, or add a market that starts to. Results also tracks its reads on your bets.
 
 ## Judging it: closing line value first
 
