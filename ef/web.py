@@ -347,6 +347,7 @@ def build_site(con, cfg, out_dir, now=None, status_line=None):
 <a class="tile res" href="bets.html"><div class="k">Results</div><div class="v">%(open)d open</div><div class="s">%(res)s</div></a>
 <details class="how"><summary>How it works</summary><ol>
 <li>Lines are only pulled when you tap <b>Run</b>, so credits go only to days you bet. A run prices every game in the next %(hours)d hours against the sharp books. Tap once to see the cost, again to run.</li>
+<li>Boards rank every pick by a 0–100 score that weighs the edge and the chance of hitting, and split today's budget ($25, $40 on NFL Sundays) into a suggested bet on the best ones.</li>
 <li>Open a board, tap the picks you actually play, then <b>Save bet</b>. The first time, Settings walks you through a one-time key.</li>
 <li>For games you bet, it saves the closing line just before the start (about 1 credit a game) and grades results from ESPN box scores after.</li>
 <li><a href="bets.html">Results</a> shows your record, profit, closing line value, how close your misses were, and what's working by app, stat and entry.</li>
