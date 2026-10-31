@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS nba_teams (abbr TEXT PRIMARY KEY, name TEXT);
 def ensure(con):
     con.executescript(SCHEMA)
     have = {r[1] for r in con.execute("PRAGMA table_info(nba_box)")}
-    if "stype" not in have:          # season type: 1 preseason, 2 regular season, 3 playoffs
+    if "stype" not in have:          # season type: 1 preseason, 2 regular season, 3 playoffs, 5 play-in
         con.execute("ALTER TABLE nba_box ADD COLUMN stype INTEGER")
         con.commit()
 
@@ -256,7 +256,7 @@ class Model:
         out = {}
         rows = self.con.execute(
             "SELECT opp, event_id, SUM(points) p, SUM(rebounds) r, SUM(assists) a, SUM(threes) t, SUM(steals) s,"
-            " SUM(blocks) b, SUM(turnovers) o FROM nba_box WHERE season=? AND game_date < ? AND COALESCE(NULLIF(stype, 0), 2) IN (2, 3)"
+            " SUM(blocks) b, SUM(turnovers) o FROM nba_box WHERE season=? AND game_date < ? AND COALESCE(NULLIF(stype, 0), 2) IN (2, 3, 5)"
             " GROUP BY opp, event_id",
             (self.season, self.today.isoformat())).fetchall()
         if rows:
@@ -309,7 +309,7 @@ class Model:
         if not parts or not key:
             return None
         rows = self.con.execute(
-            "SELECT * FROM nba_box WHERE player_key=? AND game_date < ? AND minutes > 0 AND COALESCE(NULLIF(stype, 0), 2) IN (2, 3)"
+            "SELECT * FROM nba_box WHERE player_key=? AND game_date < ? AND minutes > 0 AND COALESCE(NULLIF(stype, 0), 2) IN (2, 3, 5)"
             " ORDER BY game_date DESC LIMIT 40", (key, self.today.isoformat())).fetchall()
         cur = [r for r in rows if r["season"] == self.season]
         if len(rows) < 3 or (not cur and len(rows) < 8):

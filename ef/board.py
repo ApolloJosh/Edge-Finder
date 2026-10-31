@@ -260,9 +260,24 @@ def build(con, cfg, league, pull_id=None, now=None):
 SCORE_SCALE = 0.05     # Kelly fraction that maps to a score of 63; 0.10 maps to 86
 
 
-def model_weight(cfg, league):
+def model_weights(cfg, league):
+    """config model.weight for a league: a number for every market, or
+    {"default": w, "<market>": w, ...} to lean on the model only where a
+    backtest says it helps. Returns (default, {market: weight})."""
     w = cfg.get("model", {}).get("weight", 0.25)
-    return w.get(league, 0.0) if isinstance(w, dict) else w
+    if isinstance(w, dict) and league is not None:
+        w = w.get(league, 0.0)
+    elif isinstance(w, dict):
+        w = 0.0
+    if isinstance(w, dict):
+        return float(w.get("default", 0.0)), {k: float(v) for k, v in w.items()
+                                              if k != "default" and not k.startswith("_")}
+    return float(w), {}
+
+
+def model_weight(cfg, league, market=None):
+    d, per = model_weights(cfg, league)
+    return per.get(market, d)
 
 
 def score_row(x, cfg, league=None):
@@ -272,7 +287,8 @@ def score_row(x, cfg, league=None):
              or the per-pick breakeven of the best pick'em entry it clears
     ev       sharp edge: fair / cost - 1
     p_blend  the sharp fair price nudged toward the model's read (weight
-             config model.weight; none for a market the model runs high on)
+             config model.weight, per league or per market; none for a
+             market the model runs high on)
     kelly    (p_blend - cost) / (1 - cost): how much of a bankroll the pick
              deserves. It rises with the edge and with the chance of hitting,
              so a 58% pick outranks a 40% one with the same edge
@@ -284,7 +300,7 @@ def score_row(x, cfg, league=None):
         cost = (x["ask"] or 0) + (x.get("fee") or 0)
     else:
         cost = 1.0 / x["price"] if x.get("price") else None
-    w = model_weight(cfg, league)
+    w = model_weight(cfg, league, x.get("market"))
     mp = x.get("ge_p")
     p = x["p"]
     pb = p + w * (mp - p) if (mp is not None and x.get("ge_tag") != "biased") else p

@@ -1,4 +1,5 @@
 """Full Court Edge: box-score sync, the projection, and its place on the board."""
+import copy
 import json
 import os
 import sys
@@ -138,7 +139,7 @@ class FullCourt(unittest.TestCase):
         self.assertIsNotNone(alpha["ge_p"])
         self.assertIsNotNone(alpha["proj"])
         self.assertIn(alpha["ge_tag"], ("agree", "neutral", "conflict"))
-        w = boardmod.model_weight(CFG, "nba")
+        w = boardmod.model_weight(CFG, "nba", alpha["market"])
         self.assertAlmostEqual(alpha["p_blend"], alpha["p"] + w * (alpha["ge_p"] - alpha["p"]))
         for sec in ("pickem", "fliff", "kalshi"):
             for x in b[sec]:
@@ -164,6 +165,18 @@ class Score(unittest.TestCase):
         self.assertEqual(biased["score"], lo["score"])                         # a model that runs high doesn't count
         fl = boardmod.score_row({"book": "fliff", "p": 0.55, "price": 2.0, "ge_p": None}, CFG)
         self.assertAlmostEqual(fl["ev_pct"], 0.10)
+
+    def test_weight_can_be_set_per_market(self):
+        cfg = copy.deepcopy(CFG)
+        cfg["model"] = {"weight": {"nfl": 0.25, "nba": {"default": 0.0, "player_rebounds": 0.25}}}
+        self.assertEqual(boardmod.model_weights(cfg, "nba"), (0.0, {"player_rebounds": 0.25}))
+        self.assertEqual(boardmod.model_weights(cfg, "nfl"), (0.25, {}))
+        base = {"book": "kalshi", "fee": 0.0, "price": None, "p": 0.42, "ask": 0.40, "ge_p": 0.62, "ge_tag": "agree"}
+        reb = boardmod.score_row(dict(base, market="player_rebounds"), cfg, "nba")
+        pts = boardmod.score_row(dict(base, market="player_points"), cfg, "nba")
+        self.assertAlmostEqual(reb["p_blend"], 0.47)
+        self.assertAlmostEqual(pts["p_blend"], 0.42)
+        self.assertGreater(reb["score"], pts["score"])
 
 
 if __name__ == "__main__":

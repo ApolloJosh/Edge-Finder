@@ -5,7 +5,7 @@ import html
 import json
 import os
 
-from .board import BOOK_LABELS, market_label, model_weight
+from .board import BOOK_LABELS, market_label, model_weights
 from .util import fmt_american, local, parse_iso, pct
 from .webjs import SHEET_CSS
 from .webjs import script as ef_script
@@ -271,7 +271,8 @@ def payload(board, cfg, root, web):
                "kmin": cfg["kalshi"].get("min_size", 0),
                "minb": 1 if th.get("one_book_ok") else th["min_sharp_books"]},
         "model": board.get("model"), "modelShort": "GE" if nfl else "FCE", "modelReady": board.get("model_ready"),
-        "weight": model_weight(cfg, board["league"]),
+        "weight": model_weights(cfg, board["league"])[0],
+        "wmk": {market_label(m): w for m, w in model_weights(cfg, board["league"])[1].items()},
         "budget": cfg.get("budget", {"daily": 25, "nfl_sunday": 40, "max_share": 0.25}),
     }
 
@@ -345,20 +346,29 @@ const clock = iso => new Date(iso).toLocaleTimeString(undefined, {hour: 'numeric
 
 // ---------- explanations behind the (i) buttons
 const M = D.modelShort, MN = D.model;
+function leanMarkets() { return Object.keys(D.wmk || {}).filter(k => D.wmk[k] > 0).join(', ').toLowerCase(); }
+// how far the score leans on the model: "25%", or "25% on rebounds" when only some markets lean
+function leans() {
+  const on = Object.entries(D.wmk || {}).filter(([, w]) => w > 0);
+  if (D.weight > 0) return `${Math.round(D.weight * 100)}%`;
+  if (!on.length) return '';
+  const ws = [...new Set(on.map(([, w]) => w))];
+  return ws.length === 1 ? `${Math.round(ws[0] * 100)}%` : `${Math.round(Math.min(...ws) * 100)}–${Math.round(Math.max(...ws) * 100)}%`;
+}
 window.INFO = {
   board: {t: 'How the board works', b: `<p>Every pick is priced against the sharp books: <b>Fair</b> is their chance of it hitting with the bookmaker's margin removed. Lines need ${D.th.minb} sharp books.</p>
 <p><b>Edge</b> is how much better the app's price is than fair. <b>Edges</b> shows picks that clear the bar: Kalshi and Fliff at ${(D.th.kalshi * 100).toFixed(0)}%+, pick'em when fair beats an entry's per-pick breakeven by ${(D.th.cush * 100).toFixed(1)}+ points.</p>
-<p><b>Score</b> (0–100) is the default order. It weighs the edge${D.weight > 0 ? ` and ${esc(MN)}'s read` : ''} and favors picks likely to hit. <button class="link" data-info="score">More on the score</button></p>
+<p><b>Score</b> (0–100) is the default order. It weighs the edge${leans() ? ` and ${esc(MN)}'s read` : ''} and favors picks likely to hit. <button class="link" data-info="score">More on the score</button></p>
 <p><b>${esc(M)}</b> is ${esc(MN)}'s own chance for the pick. <button class="link" data-info="model">More on ${esc(M)}</button></p>
 <p><span class="tag adj">adj</span> means the nearest sharp line was a little off this one, so its price was moved here and trimmed for that.</p>
 <p>Per-pick breakevens: ${esc(D.be)}.</p>` + (D.notes.length ? '<p><b>Notes</b></p><ul>' + D.notes.map(n => `<li>${esc(n)}</li>`).join('') + '</ul>' : '') +
      `<p>Judge it by closing line value, not early wins.</p>`},
-  score: {t: 'Score', b: `<p>One number for how good a pick is, 0–100. It starts from the sharp fair chance${D.weight > 0 ? `, leans ${Math.round(D.weight * 100)}% toward ${esc(MN)}'s read when it has one,` : ''} and asks how much of a bankroll the pick deserves at this price (the Kelly formula).</p>
+  score: {t: 'Score', b: `<p>One number for how good a pick is, 0–100. It starts from the sharp fair chance${leans() ? `, leans ${leans()} toward ${esc(MN)}'s read${D.weight > 0 ? '' : ' on ' + leanMarkets()} when it has one,` : ''} and asks how much of a bankroll the pick deserves at this price (the Kelly formula).</p>
 <p>That rewards both a bigger edge and a better chance of hitting: at the same edge, a 58% pick scores higher than a 40% one, because it grows your money with fewer swings.</p>
 <p>60+ is strong, 40–59 is solid, under 40 is thin.</p>`},
   model: {t: MN, b: D.nfl ? `<p>Gridiron Edge's own chance for the pick, from its weekly scan. <span class="tag agree">agrees</span> at 55%+, <span class="tag conflict">check news</span> at 45% or less. <span class="tag biased">runs high</span> marks markets where its median sits too high; those don't move the score.</p>`
     : `<p>Edge Finder's own NBA projection from ESPN box scores: recent minutes and per-minute production, adjusted for how much the opponent allows. <span class="tag agree">agrees</span> at 55%+, <span class="tag conflict">disagrees</span> at 45% or less.</p>
-<p>It doesn't know about injuries or who's sitting tonight. ${D.weight > 0 ? `It moves the score ${Math.round(D.weight * 100)}% of the way toward its read.` : `On past boards it hasn't beaten the sharp price yet, so its read is shown but doesn't move the score. That changes once a backtest shows it helps.`} Results tracks whether its reads hit.</p>`},
+<p>It doesn't know about injuries or who's sitting tonight. ${D.weight > 0 ? `It moves the score ${leans()} of the way toward its read.` : leans() ? `On past boards it beat the sharp price only for ${leanMarkets()}, so it moves the score ${leans()} of the way toward its read there. Elsewhere its read is shown but doesn't move the score.` : `On past boards it hasn't beaten the sharp price yet, so its read is shown but doesn't move the score. That changes once a backtest shows it helps.`} Results tracks whether its reads hit.</p>`},
   budget: {t: "Today's budget", b: `<p>Suggested stakes split what's left of today's budget across the best Kalshi and Fliff picks by score, with no more than ${Math.round(D.budget.max_share * 100)}% of the day on any one bet. Pick'em entries get a suggestion when you select them.</p>
 <p>The budget is $${D.budget.daily} a day and $${D.budget.nfl_sunday} on NFL Sundays. Bets you've saved today come off the top. Tap the bar to change today's number.</p>`},
 };
