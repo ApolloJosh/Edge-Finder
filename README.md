@@ -106,8 +106,8 @@ Each pick is one card: the player and pick, a **score**, and three numbers. Tap 
 has the game, the sharp lines and anything adjusted. The (i) buttons explain each part in the app.
 
 - **Score (0–100)**: the default order under both *Edges* and *All*. It starts from the sharp fair chance,
-  leans 25% toward the model's read (`config.json` → `model.weight`) and asks how much of a bankroll the pick
-  deserves at its price (Kelly). That rewards a bigger edge *and* a better chance of hitting: at the same
+  leans toward the model's read by `config.json` → `model.weight` (Gridiron Edge 25%; Full Court Edge 0 until a
+  backtest shows it helps) and asks how much of a bankroll the pick deserves at its price (Kelly). That rewards a bigger edge *and* a better chance of hitting: at the same
   edge, a 58% pick scores above a 40% one. 60+ is strong, 40–59 solid, under 40 thin.
 - **Edge**: how much better the app's price is than fair. Kalshi: fair ÷ (ask + fee) − 1. Fliff: fair × odds − 1.
   Pick'em: fair ÷ the per-pick breakeven of the easiest entry it clears − 1.
@@ -141,9 +141,14 @@ ESPN box scores (free; newest first, back to the start of last season). For each
   halfway to average (more, early on) and kept within ±15%
 - **spread**: the player's own game-to-game spread blended with the stat's typical spread
 
-and turns that into a chance for the line. It doesn't know injuries or who's sitting tonight, which the sharp books
-do, so it's a second opinion: it moves the score a quarter of the way toward its read. Results shows a *Full Court
-Edge read* breakdown (agrees / neutral / disagrees vs what the market expected) so we can tell whether it earns more.
+and turns that into a chance for the line. Preseason games are left out. It doesn't know injuries or who's sitting
+tonight, which the sharp books do.
+
+**It doesn't move the score yet.** `tools/fce_backtest.py` rebuilds every past NBA board as of its pull and grades each
+line against that night's box score. On Oct 31 (1,620 lines, current season only), the sharp fair price alone had a
+log loss of 0.687; Full Court Edge alone 0.764; every blend was worse than the sharp price alone. So its read shows on
+the cards but its weight is 0. Re-run it once last season's box scores are in (Actions → Run workflow →
+fce-backtest); if a blend wins, raise `model.weight.nba` to that weight. Results also tracks its reads on your bets.
 
 ## Judging it: closing line value first
 

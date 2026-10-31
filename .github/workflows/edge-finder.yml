@@ -25,7 +25,7 @@ on:
         description: What to run
         type: choice
         default: auto
-        options: [auto, run-nba, run-nfl, gridiron-edge, probe, site-only]
+        options: [auto, run-nba, run-nfl, gridiron-edge, fce-backtest, probe, site-only]
   issues:
     types: [opened]
   push:
@@ -137,6 +137,10 @@ jobs:
             run-nba)     python edgefinder.py pull nba --yes --hours 16 ;;
             run-nfl)     python edgefinder.py pull nfl --yes --hours 16 ;;
             probe)       python edgefinder.py probe ;;
+            fce-backtest)
+              out=$(python tools/fce_backtest.py 2>&1 | tail -20)
+              echo "$out"
+              echo "::notice title=Full Court Edge backtest::${out//$'\n'/%0A}" ;;
           esac
           echo "changed=true" >> "$GITHUB_OUTPUT"
 

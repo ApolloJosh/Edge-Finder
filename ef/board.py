@@ -174,7 +174,7 @@ def build(con, cfg, league, pull_id=None, now=None):
             p = fce.prob(proj, point, side)
             row.update(ge_p=p, ge_tag=fullcourt.tag(cfg, p), ge_score=None,
                        proj=round(proj["mean"], 1) if proj else None)
-        return score_row(row, cfg)
+        return score_row(row, cfg, league)
 
     pickem, fliff, kalshi = [], [], []
     seen = set()
@@ -260,7 +260,12 @@ def build(con, cfg, league, pull_id=None, now=None):
 SCORE_SCALE = 0.05     # Kelly fraction that maps to a score of 63; 0.10 maps to 86
 
 
-def score_row(x, cfg):
+def model_weight(cfg, league):
+    w = cfg.get("model", {}).get("weight", 0.25)
+    return w.get(league, 0.0) if isinstance(w, dict) else w
+
+
+def score_row(x, cfg, league=None):
     """The common numbers every pick gets, whatever the app:
 
     cost     what winning $1 costs: Kalshi ask + fee, 1 / Fliff's decimal odds,
@@ -279,7 +284,7 @@ def score_row(x, cfg):
         cost = (x["ask"] or 0) + (x.get("fee") or 0)
     else:
         cost = 1.0 / x["price"] if x.get("price") else None
-    w = cfg.get("model", {}).get("weight", 0.25)
+    w = model_weight(cfg, league)
     mp = x.get("ge_p")
     p = x["p"]
     pb = p + w * (mp - p) if (mp is not None and x.get("ge_tag") != "biased") else p

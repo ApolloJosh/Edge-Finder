@@ -31,11 +31,11 @@ def line(name, mins, pts, reb, ast, threes):
             "stats": [str(mins), str(pts), "8-15", "%d-6" % threes, "2-2", str(reb), str(ast), "1", "0", "0"]}
 
 
-def summary(home, away, home_players, away_players, final=True):
+def summary(home, away, home_players, away_players, final=True, stype=2):
     comp = {"status": {"type": {"state": "post" if final else "in", "completed": final}},
             "competitors": [{"homeAway": "home", "team": {"id": home, "abbreviation": home, "displayName": TEAMS[home]}},
                             {"homeAway": "away", "team": {"id": away, "abbreviation": away, "displayName": TEAMS[away]}}]}
-    return {"header": {"competitions": [comp]},
+    return {"header": {"competitions": [comp], "season": {"year": 2027, "type": stype}},
             "boxscore": {"players": [
                 {"team": {"id": home, "abbreviation": home}, "statistics": [{"keys": KEYS, "athletes": [line(*p) for p in home_players]}]},
                 {"team": {"id": away, "abbreviation": away}, "statistics": [{"keys": KEYS, "athletes": [line(*p) for p in away_players]}]}]}}
@@ -57,13 +57,17 @@ class FakeESPN:
             other = [("Opp Guard %s" % opp, 34, round(20 * boost), 4, round(6 * boost), 2),
                      ("Opp Big %s" % opp, 30, round(14 * boost), round(10 * boost), 2, 0)]
             self.games[d] = ("ev%d" % i, summary("HOU", opp, hou, other))
+        # a preseason game where Alpha One scored 60: the model must ignore it
+        d = (today - timedelta(days=44)).strftime("%Y%m%d")
+        self.games[d] = ("pre1", summary("HOU", "ATL", [("Alpha One", 36, 60, 5, 4, 2)], [("Opp Guard ATL", 30, 20, 4, 6, 2)], stype=1))
 
     def __call__(self, url):
         self.calls.append(url)
         q = parse_qs(urlparse(url).query)
         if "scoreboard" in url:
             g = self.games.get(q["dates"][0])
-            return 200, {}, json.dumps({"events": [{"id": g[0]}] if g else []}).encode()
+            stype = 1 if g and g[0] == "pre1" else 2
+            return 200, {}, json.dumps({"events": [{"id": g[0], "season": {"type": stype}}] if g else []}).encode()
         if "summary" in url:
             eid = q["event"][0]
             for d, (e, s) in self.games.items():
@@ -97,7 +101,8 @@ class FullCourt(unittest.TestCase):
         newest = self.con.execute("SELECT MAX(game_date) FROM nba_box").fetchone()[0]
         self.assertEqual(newest, (self.today - timedelta(days=1)).isoformat())   # newest days first
         self.sync()
-        self.assertEqual(self.con.execute("SELECT COUNT(DISTINCT event_id) FROM nba_box").fetchone()[0], 20)
+        self.assertEqual(self.con.execute("SELECT COUNT(DISTINCT event_id) FROM nba_box").fetchone()[0], 21)
+        self.assertEqual(self.con.execute("SELECT stype FROM nba_box WHERE event_id='pre1' LIMIT 1").fetchone()[0], 1)
         before = len(self.espn.calls)
         self.sync()
         self.assertEqual(len(self.espn.calls), before)                           # nothing left to fetch
@@ -133,7 +138,7 @@ class FullCourt(unittest.TestCase):
         self.assertIsNotNone(alpha["ge_p"])
         self.assertIsNotNone(alpha["proj"])
         self.assertIn(alpha["ge_tag"], ("agree", "neutral", "conflict"))
-        w = CFG["model"]["weight"]
+        w = boardmod.model_weight(CFG, "nba")
         self.assertAlmostEqual(alpha["p_blend"], alpha["p"] + w * (alpha["ge_p"] - alpha["p"]))
         for sec in ("pickem", "fliff", "kalshi"):
             for x in b[sec]:
@@ -151,9 +156,11 @@ class Score(unittest.TestCase):
         self.assertGreater(hi["kelly"], lo["kelly"])
         neg = boardmod.score_row(dict(base, p=0.38, ask=0.40), CFG)
         self.assertEqual(neg["score"], 0)
-        agree = boardmod.score_row(dict(base, p=0.42, ask=0.40, ge_p=0.55, ge_tag="agree"), CFG)
+        agree = boardmod.score_row(dict(base, p=0.42, ask=0.40, ge_p=0.55, ge_tag="agree"), CFG, "nfl")
         self.assertGreater(agree["score"], lo["score"])
-        biased = boardmod.score_row(dict(base, p=0.42, ask=0.40, ge_p=0.70, ge_tag="biased"), CFG)
+        biased = boardmod.score_row(dict(base, p=0.42, ask=0.40, ge_p=0.70, ge_tag="biased"), CFG, "nfl")
+        unproven = boardmod.score_row(dict(base, p=0.42, ask=0.40, ge_p=0.70, ge_tag="agree"), CFG, "nba")
+        self.assertEqual(unproven["score"], lo["score"])                       # Full Court Edge: shown, weight 0 for now
         self.assertEqual(biased["score"], lo["score"])                         # a model that runs high doesn't count
         fl = boardmod.score_row({"book": "fliff", "p": 0.55, "price": 2.0, "ge_p": None}, CFG)
         self.assertAlmostEqual(fl["ev_pct"], 0.10)

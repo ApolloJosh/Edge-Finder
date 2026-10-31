@@ -60,6 +60,17 @@ CREATE TABLE IF NOT EXISTS nba_teams (abbr TEXT PRIMARY KEY, name TEXT);
 
 def ensure(con):
     con.executescript(SCHEMA)
+    have = {r[1] for r in con.execute("PRAGMA table_info(nba_box)")}
+    if "stype" not in have:          # season type: 1 preseason, 2 regular season, 3 playoffs
+        con.execute("ALTER TABLE nba_box ADD COLUMN stype INTEGER")
+        con.commit()
+
+
+def _stype(obj):
+    try:
+        return int((obj or {}).get("season", {}).get("type"))
+    except (TypeError, ValueError):
+        return None
 
 
 def season_of(day):
@@ -146,6 +157,16 @@ def sync(con, max_requests=120, today=None, fetch=http_get, aliases=None, back_t
     today = today or local(utcnow()).date()
     done = {r[0] for r in con.execute("SELECT day FROM nba_days")}
     used, days_done, games, fails = 0, 0, 0, []
+    # Games stored before season types were kept: look their days up again (one request a day).
+    for (day,) in con.execute("SELECT DISTINCT replace(game_date, '-', '') FROM nba_box WHERE stype IS NULL "
+                              "ORDER BY 1 DESC").fetchall():
+        if used >= max_requests // 4:
+            break
+        st, _, data = _get(BASE + "scoreboard?dates=" + day, fetch)
+        used += 1
+        for e in (data or {}).get("events") or []:
+            con.execute("UPDATE nba_box SET stype=? WHERE event_id=? AND stype IS NULL", (_stype(e) or 0, str(e.get("id"))))
+    con.commit()
     d = today - timedelta(days=1)
     stop = datetime.strptime(back_to, "%Y-%m-%d").date()
     while d >= stop and used < max_requests:
@@ -169,6 +190,7 @@ def sync(con, max_requests=120, today=None, fetch=http_get, aliases=None, back_t
                 break
             eid = str(e.get("id"))
             if con.execute("SELECT 1 FROM nba_box WHERE event_id=? LIMIT 1", (eid,)).fetchone():
+                con.execute("UPDATE nba_box SET stype=? WHERE event_id=? AND stype IS NULL", (_stype(e) or 0, eid))
                 continue
             st2, _, summ = _get(BASE + "summary?event=" + eid, fetch)
             used += 1
@@ -185,11 +207,12 @@ def sync(con, max_requests=120, today=None, fetch=http_get, aliases=None, back_t
             for r in rows:
                 con.execute(
                     "INSERT OR REPLACE INTO nba_box (event_id, game_date, season, team, opp, home, player, player_key,"
-                    " starter, minutes, points, rebounds, assists, threes, steals, blocks, turnovers)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " starter, minutes, points, rebounds, assists, threes, steals, blocks, turnovers, stype)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (eid, d.isoformat(), season_of(d), r["team"], r["opp"], r["home"], r["player"], r["player_key"],
                      r["starter"], r.get("minutes"), r.get("points"), r.get("rebounds"), r.get("assists"),
-                     r.get("threes"), r.get("steals"), r.get("blocks"), r.get("turnovers")))
+                     r.get("threes"), r.get("steals"), r.get("blocks"), r.get("turnovers"),
+                     _stype(summ.get("header")) or _stype(e) or 0))
             games += 1
         if complete:
             con.execute("INSERT OR REPLACE INTO nba_days (day, games, fetched_at) VALUES (?,?,?)",
@@ -219,6 +242,7 @@ class Model:
         self.today = today or local(utcnow()).date()
         self.season = season_of(self.today)
         self.cfg = (cfg or {}).get("full_court_edge", {}) if cfg else {}
+        self.uncertainty = self.cfg.get("projection_error", 0.15)
         self._opp = None
         self._keys = None
 
@@ -232,7 +256,8 @@ class Model:
         out = {}
         rows = self.con.execute(
             "SELECT opp, event_id, SUM(points) p, SUM(rebounds) r, SUM(assists) a, SUM(threes) t, SUM(steals) s,"
-            " SUM(blocks) b, SUM(turnovers) o FROM nba_box WHERE season=? AND game_date < ? GROUP BY opp, event_id",
+            " SUM(blocks) b, SUM(turnovers) o FROM nba_box WHERE season=? AND game_date < ? AND COALESCE(NULLIF(stype, 0), 2) IN (2, 3)"
+            " GROUP BY opp, event_id",
             (self.season, self.today.isoformat())).fetchall()
         if rows:
             stats = ("points", "rebounds", "assists", "threes", "steals", "blocks", "turnovers")
@@ -284,14 +309,16 @@ class Model:
         if not parts or not key:
             return None
         rows = self.con.execute(
-            "SELECT * FROM nba_box WHERE player_key=? AND game_date < ? AND minutes > 0 ORDER BY game_date DESC LIMIT 40",
-            (key, self.today.isoformat())).fetchall()
+            "SELECT * FROM nba_box WHERE player_key=? AND game_date < ? AND minutes > 0 AND COALESCE(NULLIF(stype, 0), 2) IN (2, 3)"
+            " ORDER BY game_date DESC LIMIT 40", (key, self.today.isoformat())).fetchall()
         cur = [r for r in rows if r["season"] == self.season]
         if len(rows) < 3 or (not cur and len(rows) < 8):
             return None
         # weights: recency, and last season counts half
         w = [wt * (1.0 if r["season"] == self.season else 0.5) for wt, r in zip(_weights(len(rows), 10), rows)]
         mins_rows = cur[:12] if len(cur) >= 3 else rows[:12]
+        med = sorted(r["minutes"] for r in mins_rows)[len(mins_rows) // 2]
+        mins_rows = [r for r in mins_rows if r["minutes"] >= 0.5 * med] or mins_rows   # drop early exits
         wm = _weights(len(mins_rows), 5)
         minutes = sum(x * r["minutes"] for x, r in zip(wm, mins_rows)) / sum(wm)
         opp = self._opp_factors().get(opp_team) if opp_team else None
@@ -306,8 +333,9 @@ class Model:
             totals.append(sum((r[s] or 0) for s in parts) * (minutes / r["minutes"] if r["minutes"] else 1.0))
         emp = _sd(totals) if len(totals) >= 5 else None
         model_sd = stat_sigma(market, max(mean, 0.5))
-        sd = math.sqrt(0.5 * emp ** 2 + 0.5 * model_sd ** 2) if emp else model_sd
-        sd = max(sd, 0.8 * model_sd)
+        game_sd = max(math.sqrt(0.5 * emp ** 2 + 0.5 * model_sd ** 2) if emp else model_sd, 0.8 * model_sd)
+        # Plus the projection's own error: it doesn't know tonight's role, minutes or matchup the way the market does.
+        sd = math.sqrt(game_sd ** 2 + (self.uncertainty * mean) ** 2)
         return {"mean": mean, "sd": sd, "games": len(cur), "minutes": minutes, "key": key}
 
     def prob(self, proj, line, side):
