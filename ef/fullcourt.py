@@ -131,13 +131,21 @@ def parse_summary(summary, aliases=None):
     return out
 
 
+def _get(url, fetch):
+    """get_json that never raises: a timeout or network error is just a failed read."""
+    try:
+        return get_json(url, fetch)
+    except (Exception, SystemExit) as e:          # http_get raises SystemExit on network errors
+        return "error: %s" % str(e)[:60], {}, None
+
+
 def sync(con, max_requests=120, today=None, fetch=http_get, aliases=None, back_to="2025-10-21", log=print):
     """Fill in box scores, newest days first, within a request budget.
     A day is done once all its games were final when fetched."""
     ensure(con)
     today = today or local(utcnow()).date()
     done = {r[0] for r in con.execute("SELECT day FROM nba_days")}
-    used, days_done, games = 0, 0, 0
+    used, days_done, games, fails = 0, 0, 0, []
     d = today - timedelta(days=1)
     stop = datetime.strptime(back_to, "%Y-%m-%d").date()
     while d >= stop and used < max_requests:
@@ -145,10 +153,14 @@ def sync(con, max_requests=120, today=None, fetch=http_get, aliases=None, back_t
         if key in done:
             d -= timedelta(days=1)
             continue
-        st, _, data = get_json(BASE + "scoreboard?dates=" + key, fetch)
+        st, _, data = _get(BASE + "scoreboard?dates=" + key, fetch)
         used += 1
         if st != 200 or data is None:
-            break                                  # ESPN unhappy: try again next run
+            fails.append("%s: HTTP %s" % (key, st))     # skip the day; the next run tries it again
+            if len(fails) >= 3:
+                break
+            d -= timedelta(days=1)
+            continue
         events = data.get("events") or []
         complete = True
         for e in events:
@@ -158,7 +170,7 @@ def sync(con, max_requests=120, today=None, fetch=http_get, aliases=None, back_t
             eid = str(e.get("id"))
             if con.execute("SELECT 1 FROM nba_box WHERE event_id=? LIMIT 1", (eid,)).fetchone():
                 continue
-            st2, _, summ = get_json(BASE + "summary?event=" + eid, fetch)
+            st2, _, summ = _get(BASE + "summary?event=" + eid, fetch)
             used += 1
             rows = parse_summary(summ, aliases) if st2 == 200 and summ else None
             if rows is None:
@@ -185,9 +197,10 @@ def sync(con, max_requests=120, today=None, fetch=http_get, aliases=None, back_t
             days_done += 1
         con.commit()
         d -= timedelta(days=1)
-    if games or days_done:
-        log("Full Court Edge: %d new game(s), %d day(s) complete, %d ESPN requests." % (games, days_done, used))
-    return {"games": games, "days": days_done, "requests": used}
+    if games or days_done or fails:
+        log("Full Court Edge: %d new game(s), %d day(s) complete, %d ESPN requests%s." % (
+            games, days_done, used, ("; couldn't read " + ", ".join(fails)) if fails else ""))
+    return {"games": games, "days": days_done, "requests": used, "failed": fails}
 
 
 # ------------------------------------------------------------------ the model
