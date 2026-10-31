@@ -8,8 +8,8 @@ that are too far away or would move too much, applies the same haircut for a
 moved price, then compares the fair chance with the price plus fees.
 """
 
-CONTENT = """<h1>Check a price</h1>
-<div class="sub">For Robinhood and other apps without a price feed. Find the player, set the line and the price it shows, and get a call.</div>
+CONTENT = """<div class="titlerow"><h1>Check a price</h1><button class="info" data-info="check" aria-label="How Check works">i</button></div>
+<div class="sub">For Robinhood and other apps without a price feed.</div>
 <div class="ck-top">
 <div class="seg" id="ck-lg"><button data-l="nfl">NFL</button><button data-l="nba">NBA</button></div>
 <input id="ck-q" type="search" placeholder="Player name" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Player name">
@@ -149,8 +149,10 @@ async function setLeague(l) {
   players = D ? group(D) : [];
   cur = null;
   $('#ck-pick').innerHTML = '';
-  $('#ck-foot').innerHTML = D ? `${players.length} ${l.toUpperCase()} players with sharp prices, from the last Run. ` +
-    `Touchdown markets aren't priced yet. Fees assumed: ${(100 * D.fee).toFixed(1)}¢ a contract.` : '';
+  $('#ck-foot').innerHTML = D ? `${players.length} ${l.toUpperCase()} players with sharp prices from the last Run.` : '';
+  window.INFO = {check: {t: 'Check a price', b: `<p>Find the player, pick the stat, set the line the app shows (60+ means Yes = 60 or more) and its price in cents. You get <b>Take it</b> or <b>Skip it</b>, and the most it's worth paying.</p>
+<p>It uses the same sharp fair price as the board. Take it needs a ${D ? (100 * D.minEv).toFixed(0) : 3}%+ expected return after about ${D ? (100 * D.fee).toFixed(1) : '1.5'}¢ a contract in fees. Lines far from the sharp books' number get Skip it, because there's no reliable fair price there.</p>
+<p>Touchdown markets aren't priced yet.</p>`}};
   list();
 }
 

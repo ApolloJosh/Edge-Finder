@@ -7,17 +7,23 @@ result, and closes them. Nobody has to look at GitHub.
 """
 
 SHEET_CSS = """
-.sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:50;display:none}
+.sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;display:none}
 .sheet-bg.on{display:block}
-.sheet{position:fixed;left:0;right:0;bottom:0;z-index:51;background:var(--panel);border-radius:18px 18px 0 0;
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:51;background:var(--panel);border-radius:22px 22px 0 0;border-top:1px solid var(--line);
 max-height:88vh;overflow:auto;transform:translateY(110%);transition:transform .2s ease;box-shadow:var(--shadow)}
 .sheet.on{transform:none}
 .sheet-in{max-width:560px;margin:0 auto;padding:16px 18px calc(18px + env(safe-area-inset-bottom))}
-.sheet h3{margin:4px 0 6px;font-size:18px}
+.sheet h3{margin:4px 0 8px;font-size:19px;font-weight:800;letter-spacing:-.01em}
+.sheet .grab{width:38px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 12px}
+.fld{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:8px 0;font-weight:600;color:var(--ink)}
+.fld input{width:110px;min-height:46px;font:inherit;font-size:16px;font-weight:700;text-align:center;border:1px solid var(--line);
+border-radius:999px;background:var(--bg);color:var(--ink)}
+.fld.chk{justify-content:flex-start;gap:10px}
+.fld.chk input{width:22px;min-height:22px;height:22px}
 .sheet p,.sheet li{color:var(--dim);font-size:14px;line-height:1.5}
 .sheet ol{padding-left:20px;margin:8px 0}
 .sheet input[type=password],.sheet input[type=text]{width:100%;font:inherit;font-size:15px;padding:11px 12px;border:1px solid var(--line);
-border-radius:10px;background:var(--bg);color:var(--ink);margin:6px 0 10px}
+border-radius:12px;background:var(--bg);color:var(--ink);margin:6px 0 10px}
 .sheet .row{display:flex;gap:8px;margin-top:6px}
 .sheet .row>*{flex:1}
 .okline{color:var(--accent);font-weight:650}
@@ -146,22 +152,32 @@ notes on Edge-Finder; it can't change code or see anything else.</p>
       if (!bg) {
         bg = document.createElement('div'); bg.id = 'cf-bg'; bg.className = 'sheet-bg';
         s = document.createElement('div'); s.id = 'cf'; s.className = 'sheet'; s.setAttribute('role', 'dialog'); s.setAttribute('aria-modal', 'true');
-        s.innerHTML = '<div class="sheet-in"><h3></h3><div class="cf-body"></div><div class="row"><button class="ghost" id="cf-no"></button><button id="cf-yes"></button></div></div>';
+        s.innerHTML = '<div class="sheet-in"><div class="grab"></div><h3></h3><div class="cf-body"></div><div class="row"><button class="ghost" id="cf-no"></button><button id="cf-yes"></button></div></div>';
         document.body.appendChild(bg); document.body.appendChild(s);
       }
       s.querySelector('h3').textContent = o.title;
       s.querySelector('.cf-body').innerHTML = o.body || '';
       const yes = s.querySelector('#cf-yes'), no = s.querySelector('#cf-no');
       yes.textContent = o.ok || 'OK'; no.textContent = o.cancel || 'Cancel';
+      no.hidden = !!o.single;
       yes.className = o.danger ? 'danger' : '';
       const done = v => { bg.classList.remove('on'); s.classList.remove('on'); document.removeEventListener('keydown', esc); resolve(v); };
       const esc = e => { if (e.key === 'Escape') done(false); };
       yes.onclick = () => done(true); no.onclick = () => done(false); bg.onclick = () => done(false);
       document.addEventListener('keydown', esc);
-      bg.classList.add('on'); s.classList.add('on'); no.focus();
+      bg.classList.add('on'); s.classList.add('on'); (o.single ? yes : no).focus();
     });
   }
-  return {send, pending, openSettings, token, toast, issueLink, store, confirm};
+  // (i) buttons: <button class="info" data-info="key"> shows window.INFO[key] = {t, b}
+  function info(key) {
+    const it = (window.INFO || {})[key];
+    if (it) confirm({title: it.t, body: it.b, ok: 'Got it', single: true});
+  }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-info]');
+    if (b) { e.preventDefault(); e.stopPropagation(); info(b.dataset.info); }
+  }, true);
+  return {send, pending, openSettings, token, toast, issueLink, store, confirm, info};
 })();
 """
 

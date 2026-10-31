@@ -32,6 +32,7 @@ from ef import bets as betlog
 from ef import board as boardmod
 from ef import gridiron, render
 from ef import auto as automod
+from ef import fullcourt
 from ef import grade as grademod
 from ef import web
 from ef.config import BOARDS_DIR, ROOT, load_aliases, load_config, load_env, odds_api_key
@@ -135,6 +136,12 @@ def cmd_auto(cfg, con, args):
         changed = changed or n > 0 or counts.get("legs", 0) > 0
     except Exception as e:  # grading must never stop the scheduled pass
         notice("Grading skipped: %s" % e)
+    try:      # Full Court Edge's box scores: free, a few more days each run
+        fce = cfg.get("full_court_edge", {})
+        fullcourt.sync(con, max_requests=fce.get("requests_per_run", 120), aliases=load_aliases(),
+                       back_to=fce.get("back_to", "2025-10-21"), log=notice)
+    except Exception as e:
+        notice("Full Court Edge sync skipped: %s" % e)
     automod.prune(con)
     gh_output(changed="true" if changed else "false")
 
@@ -151,6 +158,14 @@ def handle_command(cmd, number=None):
         argv += ["--note", "issue #%d" % number]   # lets the app see the bet has been recorded
     if argv[0] in ("run", "refresh"):
         lg = argv[1] if len(argv) > 1 else "nba"
+        if lg == "nba":      # last night's box scores first, so Full Court Edge's read is current
+            try:
+                con = connect()
+                fullcourt.sync(con, max_requests=40, aliases=load_aliases(),
+                               back_to=load_config().get("full_court_edge", {}).get("back_to", "2025-10-21"))
+                con.close()
+            except Exception as e:
+                print("Full Court Edge sync skipped: %s" % e)
         ok, text = web.run_cli(main, ["pull", lg, "--yes", "--hours", str(load_config().get("manual", {}).get("hours_ahead", 16))])
         # Nothing pulled (no games left, out of credits) counts as a failure, so the app stops waiting.
         return ok and "Pulled " in text, text

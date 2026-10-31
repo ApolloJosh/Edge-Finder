@@ -98,11 +98,11 @@
   },
 
   "thresholds": {
-    "pickem_cushion": 0.01,
+    "pickem_cushion": 0.005,
     "adj_haircut_per_sd": 0.03,
     "max_shift": 0.08,
-    "fliff_min_ev": 0.03,
-    "kalshi_min_ev": 0.03,
+    "fliff_min_ev": 0.02,
+    "kalshi_min_ev": 0.02,
     "min_sharp_books": 2,
     "one_book_ok": false,
     "entries_from_different_games": true
@@ -118,6 +118,24 @@
     "horizon_hours": 14,
     "daily_credit_cap": 350,
     "credit_floor": 40
+  },
+
+  "model": {
+    "_note": "How much the overall score leans on Gridiron Edge (NFL) or Full Court Edge (NBA) instead of the sharp books' fair price. Keep it small until Results shows the model's read helps.",
+    "weight": 0.25
+  },
+
+  "full_court_edge": {
+    "_note": "Edge Finder's NBA model, built from ESPN box scores (free). Each scheduled run fetches up to requests_per_run pages, newest days first, back to back_to.",
+    "requests_per_run": 200,
+    "back_to": "2025-10-21"
+  },
+
+  "budget": {
+    "_note": "Spending per day across everything, and the most any one bet gets. Suggested stakes split what's left today across the best picks.",
+    "daily": 25,
+    "nfl_sunday": 40,
+    "max_share": 0.25
   },
 
   "manual": {

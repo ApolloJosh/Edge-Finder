@@ -83,22 +83,22 @@ STATIC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 EXTRA_CSS = """
 .tiles{display:grid;grid-template-columns:1fr;gap:10px;margin-top:14px}
 @media (min-width:640px){.tiles{grid-template-columns:repeat(3,1fr)}}
-a.tile{display:block;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;color:var(--ink);text-decoration:none}
+a.tile{display:block;background:var(--panel);border-radius:var(--r);padding:14px 16px;color:var(--ink);text-decoration:none}
 a.tile .k{font-size:13px;font-weight:650;color:var(--dim)}
 a.tile .v{font-size:26px;font-weight:800;margin:2px 0;font-variant-numeric:tabular-nums}
 a.tile .s{font-size:13px;color:var(--dim)}
 .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
 .actions .btn{width:100%}
-details.how{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 16px}
+details.how{margin-top:16px;background:var(--panel);border-radius:var(--r);padding:12px 16px}
 details.how summary{font-weight:650;cursor:pointer}
 details.how ol{color:var(--dim);font-size:14px;line-height:1.65;padding-left:20px;margin:8px 0 2px}
 .kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
 @media (min-width:640px){.kpis{grid-template-columns:repeat(3,1fr)}}
-.kpi{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.kpi{background:var(--panel);border-radius:var(--r);padding:12px 14px}
 .kpi .k{font-size:12.5px;color:var(--dim);font-weight:600}
-.kpi .v{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}
+.kpi .v{font-size:26px;font-weight:850;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
 .kpi .s{font-size:12px;color:var(--faint)}
-ul.break{list-style:none;margin:0;padding:0;background:var(--panel);border:1px solid var(--line);border-radius:14px}
+ul.break{list-style:none;margin:0;padding:0;background:var(--panel);border-radius:var(--r)}
 ul.break li{display:flex;justify-content:space-between;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:14px}
 ul.break li:last-child{border-bottom:0}
 ul.break li span:last-child{color:var(--dim);font-variant-numeric:tabular-nums;text-align:right}
@@ -264,12 +264,12 @@ HOME_JS = r"""<script>
 HOME_CSS = """
 .runs{display:grid;grid-template-columns:1fr;gap:12px;margin-top:14px}
 @media (min-width:640px){.runs{grid-template-columns:1fr 1fr}}
-.lgc{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px}
+.lgc{background:var(--panel);border-radius:var(--r);padding:14px}
 .lgh{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px}
 .lgh h2{margin:0;font-size:20px}
 .lgh a{font-size:14px;font-weight:650;text-decoration:none;white-space:nowrap}
 .lgh a.none{color:var(--faint);pointer-events:none}
-button.runbtn{width:100%;min-height:78px;flex-direction:column;gap:4px;border-radius:14px;padding:12px 14px}
+button.runbtn{width:100%;min-height:80px;flex-direction:column;gap:4px;border-radius:18px;padding:12px 14px}
 .runbtn .rl{font-size:21px;font-weight:800;line-height:1.15;display:inline-flex;align-items:center}
 .runbtn .rs{font-size:13.5px;font-weight:600;opacity:.92;line-height:1.3}
 button.runbtn.confirm{background:var(--warn-bg);border-color:var(--warn);color:var(--warn)}
@@ -455,17 +455,16 @@ def results_payload(con, cfg, repo, now):
 
 
 RESULTS_CSS = """
-.viz{--s-pos:#2a78d6;--s-neg:#e34948;--grid:#e1e0d9;--base:#c3c2b7}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .viz{--s-pos:#3987e5;--s-neg:#e66767;--grid:#2c2c2a;--base:#383835}}
+.viz{--s-pos:#3987e5;--s-neg:#e66767;--grid:#262d38;--base:#3a4351}
 .filters{display:flex;gap:8px;align-items:center;margin:14px 0 4px;overflow-x:auto;scrollbar-width:none}
 .filters::-webkit-scrollbar{display:none}
-.chart{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 12px 6px;margin-top:10px}
-.chart .t{font-weight:650;font-size:14px}.chart .st{font-size:12.5px;color:var(--faint);margin-bottom:4px}
+.chart{position:relative;background:var(--panel);border-radius:var(--r);padding:12px 12px 6px;margin-top:10px}
+.chart .t{font-weight:700;font-size:14.5px;display:flex;align-items:center;gap:8px;margin-bottom:6px}.chart .st{font-size:12.5px;color:var(--faint);margin-bottom:4px}
 .chart svg{display:block;width:100%;height:190px;touch-action:pan-y}
 .chart .tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);border-radius:8px;padding:6px 9px;font-size:12.5px;
 line-height:1.35;white-space:nowrap;display:none;z-index:2}
 .chart .tip b{font-size:14px}
-.bars{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:4px 14px}
+.bars{background:var(--panel);border-radius:var(--r);padding:4px 14px}
 .bar-row{padding:10px 0 9px;border-bottom:1px solid var(--line)}
 .bar-row:last-child{border-bottom:0}
 .bar-row .top{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
@@ -490,11 +489,6 @@ line-height:1.35;white-space:nowrap;display:none;z-index:2}
 button.link.fix{font-size:12.5px;padding:4px 0;min-height:30px;color:var(--faint)}
 button.link.fix.need{color:var(--accent)}
 .fx-prev{font-weight:650;color:var(--ink)}
-.fld.chk{justify-content:flex-start;gap:10px}
-.fld.chk input{width:22px;min-height:22px;height:22px}
-.fld{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:8px 0;font-weight:600;color:var(--ink)}
-.fld input{width:110px;min-height:44px;font:inherit;font-size:16px;font-weight:700;text-align:center;border:1px solid var(--line);
-border-radius:10px;background:var(--bg);color:var(--ink)}
 button.link.del{color:var(--faint);font-size:13px;min-height:36px;padding:6px 2px}
 details.how .drow{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
 details.how .drow:first-of-type{border-top:0}
@@ -670,15 +664,21 @@ function lineChart(el, pts, fmt, tipFn) {
   const hide = () => { xh.setAttribute('visibility', 'hidden'); xd.setAttribute('visibility', 'hidden'); tip.style.display = 'none'; };
   hit.addEventListener('pointermove', show); hit.addEventListener('pointerdown', show); hit.addEventListener('pointerleave', hide);
 }
+window.INFO = window.INFO || {};
+function infoBtn(key, title, html) {
+  window.INFO[key] = {t: title, b: html};
+  return `<button class="info" data-info="${key}" aria-label="About ${esc(title)}">i</button>`;
+}
 function chartBox(id, title, sub) {
-  return `<div class="chart viz" id="${id}"><div class="t">${esc(title)}</div><div class="st">${esc(sub)}</div><svg role="img" aria-label="${esc(title)}"></svg><div class="tip"></div></div>`;
+  return `<div class="chart viz" id="${id}"><div class="t">${esc(title)} ${infoBtn(id, title, '<p>' + esc(sub) + '.</p>')}</div><svg role="img" aria-label="${esc(title)}"></svg><div class="tip"></div></div>`;
 }
 
 // ---------- diverging bars (value labelled with its sign, so color never carries it alone)
 function barGroup(title, rows, fmtV, note) {
   if (!rows.length) return '';
   const max = Math.max(...rows.map(r => Math.abs(r.v)), 1e-9);
-  return `<h2>${esc(title)}${note ? ` <small>${esc(note)}</small>` : ''}</h2><div class="bars viz">` + rows.map(r => {
+  const key = 'bg-' + title.replace(/[^a-z]/gi, '').toLowerCase();
+  return `<h2>${esc(title)}${note ? ' ' + infoBtn(key, title, '<p>' + esc(note[0].toUpperCase() + note.slice(1)) + '. Bars to the right did better than expected, to the left worse. Pale rows have under 10 bets, so read them lightly.</p>') : ''}</h2><div class="bars viz">` + rows.map(r => {
     const w = Math.max(1.5, 50 * Math.abs(r.v) / max);
     return `<div class="bar-row${r.n < 10 ? ' small' : ''}"><div class="top"><span class="lab">${esc(r.k)}</span><span class="val">${esc(fmtV(r.v))}</span></div>
 <div class="track"><div class="zero"></div><div class="fill ${r.v >= 0 ? 'pos' : 'neg'}" style="width:${w}%"></div></div>
@@ -746,8 +746,9 @@ function render() {
   else h += `<div class="empty" style="margin-top:10px">Your profit chart starts after two settled bets. Results are graded from ESPN box scores after each game.</div>`;
   if (clvLegs.length >= 2) h += chartBox('c-clv', 'Closing line value', `Average over your last ${Math.min(20, clvLegs.length)} legs, in percentage points. Above zero means the market moved your way`);
   if (landed.length >= 3) {
-    h += `<h2>How close your legs landed <small>${landed.length} graded legs</small></h2>` +
-      `<div class="chart viz hist" id="c-hist"><div class="st">How far each leg finished from its line, in standard deviations of that stat (1 SD is about ${esc(sdHint(landed))}). Dashed: where the prices you took expected them to land.</div><svg role="img" aria-label="How close your legs landed"></svg><div class="tip"></div></div>`;
+    h += `<h2>How close your legs landed <small>${landed.length} legs</small> <button class="info" data-info="c-hist" aria-label="About this chart">i</button></h2>` +
+      `<div class="chart viz hist" id="c-hist"><svg role="img" aria-label="How close your legs landed"></svg><div class="tip"></div></div>`;
+    window.INFO['c-hist'] = {t: 'How close your legs landed', b: `<p>Each graded leg by how far it finished from its line, in standard deviations of that stat (1 SD is about ${esc(sdHint(landed))}). Misses are left of the line, hits right.</p><p>The dashed line is where the prices you took expected them to land. Legs piling up just left of the line are mostly bad luck rather than bad reads. 🪝 marks legs that missed by one.</p>`};
     if (gotZ != null) {
       const diff = gotZ - expZ;
       h += `<div class="takeaway">Your legs finished <b class="${diff >= 0 ? 'pos' : 'neg'}">${Math.abs(diff).toFixed(2)} SD ${diff >= 0 ? 'further on your side' : 'short of'}</b> ${diff >= 0 ? 'than' : 'where'} the prices expected${hooks ? `, with ${hooks} hook${hooks === 1 ? '' : 's'}` : ''}.` +
@@ -760,7 +761,9 @@ function render() {
   h += barGroup('By stat', byLegs(graded, l => l.m), v => sgn(100 * v) + ' pts', 'hit rate minus what the market expected');
   const nflLegs = graded.filter(l => l.lg === 'nfl');
   if (nflLegs.length) h += barGroup('Gridiron Edge read', byLegs(nflLegs, l => 'Gridiron Edge ' + geTag(l.gp)), v => sgn(100 * v) + ' pts', 'NFL legs: did its read help?');
-  if (settled.length && settled.length < 100) h += `<div class="sub" style="margin-top:10px">Under 100 bets, records swing on luck. Closing line value is the earlier signal.</div>`;
+  const nbaLegs = graded.filter(l => l.lg === 'nba' && l.gp != null);
+  if (nbaLegs.length) h += barGroup('Full Court Edge read', byLegs(nbaLegs, l => 'Full Court Edge ' + geTag(l.gp)), v => sgn(100 * v) + ' pts', 'NBA legs: did its read help?');
+  if (settled.length && settled.length < 100) h += `<div class="sub" style="margin-top:12px">Under 100 bets, records swing on luck. Closing line value is the earlier signal.</div>`;
 
   // lists
   const pendBets = pend.filter(p => p.kind === 'bet');
@@ -768,7 +771,7 @@ function render() {
 <div class="meta">Saved ${esc(when(new Date(p.ts).toISOString()))}. It shows here once the next run records it, usually within 2 minutes.</div></div>`).join('') + '</div>';
   const pendRes = new Map(pend.filter(p => p.kind === 'result').map(p => [p.bet, p.outcome]));
   const open = bets.filter(b => b.res == null).sort((a, b) => (a.start || '').localeCompare(b.start || ''));
-  h += `<h2>Open <small>graded automatically after each game</small></h2>`;
+  h += `<h2>Open ${infoBtn('open', 'Open bets', '<p>Bets are graded from ESPN box scores a few hours after each game. A pick\'em entry with a pushed or voided leg, or a player the box score doesn\'t list, waits for you: use Fix stat, or tap Win, Loss, Push or Cash out.</p>')}</h2>`;
   h += open.length ? '<div class="grid">' + open.map(b => betCard(b, pendRes.get(b.id))).join('') + '</div>' : '<div class="empty">No open bets.</div>';
   const done = bets.filter(b => b.res != null).sort((a, b) => (b.start || b.placed).localeCompare(a.start || a.placed)).slice(0, 60);
   h += '<h2>Settled</h2>' + (done.length ? '<div class="grid">' + done.map(b => betCard(b)).join('') + '</div>' : '<div class="empty">Nothing settled yet.</div>');

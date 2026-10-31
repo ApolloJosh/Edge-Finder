@@ -1,8 +1,9 @@
 """Turn one pull into the board: every pick'em, Fliff and Kalshi line priced
 against the sharp consensus."""
+import math
 from collections import defaultdict
 
-from . import gridiron
+from . import fullcourt, gridiron
 from .fair import breakeven, consensus, entry_return, kalshi_share_fee, stat_sigma
 from .util import fmt_american, iso, local, parse_iso, short_team, utcnow
 
@@ -124,8 +125,13 @@ def build(con, cfg, league, pull_id=None, now=None):
             by_date[(d, pk, mk)] = ev_id
 
     ge_map, ge_saved = ({}, None)
+    fce, fce_cache = None, {}
     if league == "nfl":
         ge_map, ge_saved = gridiron.load_latest(con)
+    elif league == "nba":
+        fce = fullcourt.Model(con, today=local(now).date(), cfg=cfg)
+        if not fce.ready():
+            fce = None
 
     # Per-pick breakevens for each pick'em book's entry types.
     be = {}
@@ -153,12 +159,22 @@ def build(con, cfg, league, pull_id=None, now=None):
         return c
 
     def with_ge(row, market, point, side):
-        if league != "nfl":
-            return row
-        p, tag = gridiron.assess(cfg, ge_map.get((row["player_key"], market)), point, side)
-        g = ge_map.get((row["player_key"], market))
-        row.update(ge_p=p, ge_tag=tag, ge_score=(g["score"] if g else None))
-        return row
+        """Attach the model's read: Gridiron Edge (NFL) or Full Court Edge (NBA)."""
+        if league == "nfl":
+            p, tag = gridiron.assess(cfg, ge_map.get((row["player_key"], market)), point, side)
+            g = ge_map.get((row["player_key"], market))
+            row.update(ge_p=p, ge_tag=tag, ge_score=(g["score"] if g else None))
+        elif fce is not None:
+            k = (row["player_key"], market, row["event_id"])
+            if k not in fce_cache:
+                ev = events.get(row["event_id"])
+                opp = fce.opponent(row["player_key"], ev["home"], ev["away"]) if ev else None
+                fce_cache[k] = fce.project(row["player_key"], market, opp)
+            proj = fce_cache[k]
+            p = fce.prob(proj, point, side)
+            row.update(ge_p=p, ge_tag=fullcourt.tag(cfg, p), ge_score=None,
+                       proj=round(proj["mean"], 1) if proj else None)
+        return score_row(row, cfg)
 
     pickem, fliff, kalshi = [], [], []
     seen = set()
@@ -216,9 +232,8 @@ def build(con, cfg, league, pull_id=None, now=None):
             base.update(fee=fee, ev=ev_c, roi=roi, flagged=roi >= th["kalshi_min_ev"] and deep)
             kalshi.append(with_ge(base, r["market"], r["point"], side))
 
-    pickem.sort(key=lambda x: (-x["flagged"], -(x["edge"] or -1)))
-    fliff.sort(key=lambda x: (-x["flagged"], -x["ev"]))
-    kalshi.sort(key=lambda x: (-x["flagged"], -x["roi"]))
+    for section in (pickem, fliff, kalshi):
+        section.sort(key=lambda x: (-x["flagged"], -x["kelly"]))
 
     # Codes: one number per row across the whole board, flagged rows first.
     code = 0
@@ -237,7 +252,44 @@ def build(con, cfg, league, pull_id=None, now=None):
         "kalshi": kalshi, "entries": entries, "counts": dict(counts), "events": len(events),
         "games": len({x["event_id"] for x in pickem + fliff + kalshi}),
         "ge_saved": ge_saved, "ge_rows": len(ge_map), "breakevens": be,
+        "model": "Gridiron Edge" if league == "nfl" else "Full Court Edge",
+        "model_ready": bool(ge_map) if league == "nfl" else fce is not None,
     }
+
+
+SCORE_SCALE = 0.05     # Kelly fraction that maps to a score of 63; 0.10 maps to 86
+
+
+def score_row(x, cfg):
+    """The common numbers every pick gets, whatever the app:
+
+    cost     what winning $1 costs: Kalshi ask + fee, 1 / Fliff's decimal odds,
+             or the per-pick breakeven of the best pick'em entry it clears
+    ev       sharp edge: fair / cost - 1
+    p_blend  the sharp fair price nudged toward the model's read (weight
+             config model.weight; none for a market the model runs high on)
+    kelly    (p_blend - cost) / (1 - cost): how much of a bankroll the pick
+             deserves. It rises with the edge and with the chance of hitting,
+             so a 58% pick outranks a 40% one with the same edge
+    score    0-100 from kelly: 100 * (1 - e^(-kelly / 0.05))
+    """
+    if x["book"] in cfg.pickem_books:
+        cost = x.get("breakeven")
+    elif x["book"] == "kalshi":
+        cost = (x["ask"] or 0) + (x.get("fee") or 0)
+    else:
+        cost = 1.0 / x["price"] if x.get("price") else None
+    w = cfg.get("model", {}).get("weight", 0.25)
+    mp = x.get("ge_p")
+    p = x["p"]
+    pb = p + w * (mp - p) if (mp is not None and x.get("ge_tag") != "biased") else p
+    if not cost or not 0 < cost < 1:
+        x.update(cost=None, ev_pct=None, p_blend=pb, kelly=-1.0, score=0)
+        return x
+    kelly = (pb - cost) / (1 - cost)
+    x.update(cost=cost, ev_pct=p / cost - 1, p_blend=pb, kelly=kelly,
+             score=int(round(100 * (1 - math.exp(-kelly / SCORE_SCALE)))) if kelly > 0 else 0)
+    return x
 
 
 def suggest_entries(cfg, pickem, be):

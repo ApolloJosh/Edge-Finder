@@ -102,23 +102,48 @@ gridiron-edge (export now), probe (check every feed answers), site-only.
 
 ## Reading the board
 
-- **Fair**: the sharp books' chance of the pick hitting, margin removed. Two de-vig methods are
-  computed and the one less generous to your side is used. Lines need 2 sharp books.
-- **Pick'em**: flagged when Fair beats an entry's per-pick breakeven by 1 point. *Lowest bar* is
-  the app's easiest entry; *Clears* lists every entry it beats.
-- **Best entries**: top flagged picks on one app, one per game (picks in the same game are
-  correlated and can pay less), with the entry's expected return.
-- **Fliff**: flagged at 3%+ expected value at Fliff's price.
-- **Kalshi**: after Kalshi's fee (0.07 × P × (1 − P) a share, what buying by the dollar costs); flagged at
-  3%+ return with 5+ contracts on offer. A dollar stake logs as fractional shares, the way Kalshi fills it;
-  with one Kalshi pick selected you can type the exact shares Kalshi shows before saving.
-- **adj**: a sharp line sat a little off this one (say 24.5 vs 23.5), so its price was moved using
-  the stat's typical spread. Exact matches are stronger.
-- **Gridiron Edge** (NFL): its probability at the book's line plus EDGE. *agrees* (55%+),
-  *check news* (45% or less), *runs high* (Pass Yds, Pass+Rush, Rush+Rec, RB receptions, TE Rec
-  Yds still sit too high in Gridiron Edge). It never decides what's flagged.
+Each pick is one card: the player and pick, a **score**, and three numbers. Tap a card to select it; *Details*
+has the game, the sharp lines and anything adjusted. The (i) buttons explain each part in the app.
 
-Breakevens today: PrizePicks Flex 6 54.2%, Power 5 54.9%, Power 2 57.7%; Underdog 3-pick at 6x 55.0%.
+- **Score (0–100)**: the default order under both *Edges* and *All*. It starts from the sharp fair chance,
+  leans 25% toward the model's read (`config.json` → `model.weight`) and asks how much of a bankroll the pick
+  deserves at its price (Kelly). That rewards a bigger edge *and* a better chance of hitting: at the same
+  edge, a 58% pick scores above a 40% one. 60+ is strong, 40–59 solid, under 40 thin.
+- **Edge**: how much better the app's price is than fair. Kalshi: fair ÷ (ask + fee) − 1. Fliff: fair × odds − 1.
+  Pick'em: fair ÷ the per-pick breakeven of the easiest entry it clears − 1.
+- **Fair**: the sharp books' chance of the pick hitting, margin removed (the less generous of two de-vig
+  methods). Lines need 2 sharp books.
+- **GE / FCE**: the model's chance for the pick. Gridiron Edge for the NFL; Full Court Edge for the NBA
+  (below). *agrees* at 55%+, *disagrees* / *check news* at 45% or less. Gridiron Edge's *runs high* markets
+  don't move the score.
+- **Edges** shows picks that clear the bar: Kalshi and Fliff at 2%+ (Kalshi with 5+ contracts on offer),
+  pick'em when fair beats an entry's per-pick breakeven by half a point. **All** shows everything, ranked.
+- **Sort**: best score, biggest edge, **by game** (grouped under each matchup), start time, or player.
+- **adj**: a sharp line sat a little off this one (say 24.5 vs 23.5), so its price was moved using the stat's
+  typical spread and trimmed for that.
+- **Best pick'em entries** (folded at the top): flagged picks on one app, one per game, with expected return.
+
+### Today's budget and suggested stakes
+
+The bar under the title is today's budget: **$25 a day, $40 on NFL Sundays** (`config.json` → `budget`), minus
+everything saved today. Suggested stakes split what's left across the best Kalshi and Fliff picks by score, one
+per player and stat, with no more than 25% of the day on any one bet; the card shows *Bet $N* and the save bar
+starts at it. A pick'em entry gets its own suggestion when you select it. Tap the bar to change today's number.
+
+### Full Court Edge (NBA)
+
+Edge Finder's own NBA projection, the NBA's answer to Gridiron Edge. Every scheduled run pulls a few more days of
+ESPN box scores (free; newest first, back to the start of last season). For each player and stat it projects:
+
+- **per-minute production**: recent games count more (half-life 10 games); last season's games count half
+- **minutes**: recent games, half-life 5 games
+- **opponent**: how much of that stat the opponent allows against the league average this season, pulled
+  halfway to average (more, early on) and kept within ±15%
+- **spread**: the player's own game-to-game spread blended with the stat's typical spread
+
+and turns that into a chance for the line. It doesn't know injuries or who's sitting tonight, which the sharp books
+do, so it's a second opinion: it moves the score a quarter of the way toward its read. Results shows a *Full Court
+Edge read* breakdown (agrees / neutral / disagrees vs what the market expected) so we can tell whether it earns more.
 
 ## Judging it: closing line value first
 
