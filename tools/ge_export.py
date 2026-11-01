@@ -98,7 +98,7 @@ def main(index_html, out_dir, timeout_s=300):
             sys.exit(1)
         time.sleep(3)  # let practice reports and weather settle into the rows
         try:
-            with page.expect_download(timeout=60000) as dl:
+            with page.expect_download(timeout=300000) as dl:
                 page.click(BUTTON)
             d = dl.value
             dest = os.path.join(out_dir, d.suggested_filename)
