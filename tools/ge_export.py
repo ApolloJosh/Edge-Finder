@@ -109,8 +109,15 @@ def main(index_html, out_dir, timeout_s=300):
             sys.exit(1)
         browser.close()
     print("Saved %s" % dest)
+    try:
+        import json
+        rows = json.load(open(dest))["snapshot"]["rows"]
+        with_range = sum(1 for r in rows if any(m.get("median") is not None for m in (r.get("markets") or {}).values()))
+        summary = "%d players, %d with a range" % (len(rows), with_range)
+    except Exception as e:  # pragma: no cover
+        summary = "couldn't read it back: %s" % e
     if os.environ.get("GITHUB_ACTIONS"):
-        print("::notice::Gridiron Edge export saved: %s (%d KB)" % (os.path.basename(dest), os.path.getsize(dest) // 1024))
+        print("::notice::Gridiron Edge export saved: %s (%d KB, %s)" % (os.path.basename(dest), os.path.getsize(dest) // 1024, summary))
     return dest
 
 
